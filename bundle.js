@@ -3763,6 +3763,7 @@ function CharPlace(fp, lineH, size, from, to) {
 		if(cur.y+lineH > size.height) {
 			return false;
 		}
+		resultSize.height += lineH;
 		return true;
 	};
 	var time = 0;
@@ -3790,6 +3791,7 @@ function CharPlace(fp, lineH, size, from, to) {
 			}
 			ps.add(cur, f, time++);
 			cur.x += f.width;
+			resultSize.width = Math.max(resultSize.width, cur.x);
 		} else {
 			// 制御文字
 			switch(f.char) {
@@ -3803,6 +3805,7 @@ function CharPlace(fp, lineH, size, from, to) {
 			}
 		}
 	}
+	resultSize.height += lineH;
 	// 配列に詰め直し
 	var plane = [];
 	var itr = vi.entries();
@@ -3945,7 +3948,7 @@ var Text = (function (Refresh$$1) {
 	Text.prototype = Object.create( Refresh$$1 && Refresh$$1.prototype );
 	Text.prototype.constructor = Text;
 
-	var prototypeAccessors = { font: {},text: {},size: {},length: {} };
+	var prototypeAccessors = { font: {},text: {},size: {},length: {},resultSize: {} };
 	prototypeAccessors.font.set = function (f) { this.set("font", f); };
 	prototypeAccessors.text.set = function (t) { this.set("text", t); };
 	prototypeAccessors.size.set = function (r) { this.set("size", r); };
@@ -3953,6 +3956,7 @@ var Text = (function (Refresh$$1) {
 	prototypeAccessors.text.get = function () { return this.get("text"); };
 	prototypeAccessors.size.get = function () { return this.get("size"); };
 	prototypeAccessors.length.get = function () { return this.get("fontplane").length; };
+	prototypeAccessors.resultSize.get = function () { return this.get("fontplane").resultSize; };
 
 	Text.prototype._refresh_fontheight = function _refresh_fontheight () {
 		return ResourceGen.get(new RP_FontHeight(this.font));
@@ -4129,12 +4133,17 @@ var St_Text = (function (State$$1) {
 	St_Text.prototype.onUp = function onUp (self) {
 		var t = new TextDraw(new Text());
 		t.priority = 10;
-		var w = engine.width,
-			h = engine.height;
 		var str = "HELLO WORLD";
 		t.text.text = str;
 		t.text.size = new Size(1024, 512);
-		t.offset = new Vec2(200, 300);
+		var rs = t.text.resultSize;
+		var w = engine.width,
+			h = engine.height;
+		t.offset = new Vec2(
+			Math.floor(w/2 - rs.width/2),
+			Math.floor(h/2 - rs.height/2)
+		);
+
 		self.drawGroup.add(t);
 		self._text = t;
 
