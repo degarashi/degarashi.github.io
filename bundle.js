@@ -3588,7 +3588,7 @@ FontCache.prototype.get = function get (str, idx, ctx, fh) {
 			{ return ret$1; }
 	}
 	var sstr = str.substr(idx, 1);
-	var fw = ctx.measureText(sstr).width+2;
+	var fw = Math.ceil(ctx.measureText(sstr).width)+2;
 	var ret;
 	for(;;) {
 		ret = this$1._plane.back().get(code, sstr, ctx, fw, fh);
