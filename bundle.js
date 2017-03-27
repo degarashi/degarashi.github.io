@@ -2,7 +2,17 @@
 'use strict';
 
 //! 一行分を切り出す
-
+function GetLine(fp, from) {
+	var len = fp.length;
+	for(var i=from ; i<len ; i++) {
+		var f = fp[i];
+		if(!f.chara) {
+			if(f.char === "\n")
+				{ return i; }
+		}
+	}
+	return i;
+}
 
 function PaddingString(n, c) {
 	var str = "";
@@ -2025,6 +2035,7 @@ var Scene = (function (FSMachine$$1) {
 		return this._draw;
 	};
 	Scene.prototype.onUpdate = function onUpdate (dt) {
+		FSMachine$$1.prototype.onUpdate.call(this, dt);
 		this._update.onUpdate(dt);
 	};
 	Scene.prototype.onDraw = function onDraw () {
@@ -2948,7 +2959,7 @@ ResStack.prototype.popFrame = function popFrame (n) {
 
 Object.defineProperties( ResStack.prototype, prototypeAccessors$8 );
 
-var St$1 = (function (State$$1) {
+var St = (function (State$$1) {
 	function St () {
 		State$$1.apply(this, arguments);
 	}if ( State$$1 ) St.__proto__ = State$$1;
@@ -2961,7 +2972,7 @@ var St$1 = (function (State$$1) {
 }(State));
 var LoadingScene = (function (Scene$$1) {
 	function LoadingScene(res, nextScene) {
-		Scene$$1.call(this, 0, new St$1());
+		Scene$$1.call(this, 0, new St());
 		window.resource.loadFrame(
 			res,
 			function (){
@@ -3234,6 +3245,7 @@ Alg.prototype.advance = function advance (vpos, dt) {
 		vec3		a_position;
 	}
 	uniform {
+		float		u_alpha;
 		mat4		u_mTrans,
 					u_mWorld;
 		vec3		u_eyePos;
@@ -3255,16 +3267,16 @@ PSprite.prototype.advance = function advance (dt) {
 	this._alg.advance(this._vpos, dt);
 	this._geom.vb.a_position.setData(this._vpos, glc.E_Drawtype.Dynamic);
 };
-PSprite.prototype.draw = function draw () {
+PSprite.prototype.draw = function draw (alpha) {
 		var this$1 = this;
 
 	engine.technique = "psprite";
 	if(this.texture)
 		{ engine.setUniform("u_texture", this.texture); }
 	engine.sys3d.worldMatrix = Mat44.Identity();
+	engine.setUniform("u_alpha", alpha);
 	engine.draw(function (){
 		DrawWithGeom(this$1._geom, gl.POINTS);
-		gl.drawArrays(gl.POINTS, 0, this$1._vpos.length);
 	});
 };
 /* global resource */
@@ -3273,6 +3285,7 @@ var PSpriteDraw = (function (Drawable$$1) {
 		Drawable$$1.call(this);
 		this._psprite = new PSprite(new Alg(2000));
 		this._psprite.texture = resource.getResource("sphere");
+		this.alpha = 1;
 	}
 
 	if ( Drawable$$1 ) PSpriteDraw.__proto__ = Drawable$$1;
@@ -3283,7 +3296,7 @@ var PSpriteDraw = (function (Drawable$$1) {
 	};
 	PSpriteDraw.prototype.onUpdate = function onUpdate () {
 		if(Drawable$$1.prototype.onUpdate.call(this)) {
-			this._psprite.draw();
+			this._psprite.draw(this.alpha);
 			return true;
 		}
 		return false;
@@ -3291,55 +3304,852 @@ var PSpriteDraw = (function (Drawable$$1) {
 
 	return PSpriteDraw;
 }(Drawable));
-/* global scene */
-var PSpriteObj = (function (GObject$$1) {
-	function PSpriteObj () {
-		GObject$$1.apply(this, arguments);
+
+var Font = (function () {
+	function anonymous(family, size, weight, italic) {
+		var assign;
+	(assign = [family, size, weight, italic], this.family = assign[0], this.size = assign[1], this.weight = assign[2], this.italic = assign[3]);
 	}
 
-	if ( GObject$$1 ) PSpriteObj.__proto__ = GObject$$1;
-	PSpriteObj.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	PSpriteObj.prototype.constructor = PSpriteObj;
-
-	PSpriteObj.prototype.onConnected = function onConnected () {
-		this._draw = new PSpriteDraw();
-		scene.top.drawGroup.add(this._draw);
+	var prototypeAccessors = { fontstr: {} };
+	prototypeAccessors.fontstr.get = function () {
+		var italic = this.italic ? "italic" : "";
+		return (italic + " " + (this.weight) + " " + (this.size) + " " + (this.family));
 	};
-	PSpriteObj.prototype.onUpdate = function onUpdate (dt) {
-		this._draw.advance(dt);
+
+	Object.defineProperties( anonymous.prototype, prototypeAccessors );
+
+	return anonymous;
+}());
+
+ResourceGenSrc.FontCtx = function(rp) {
+	var c = ResourceGen.get(new RP_Canvas(rp.canvasId));
+	// 後で変える
+	c.width = c.height = 512;
+	var ctx = c.getContext("2d");
+	ctx.textAlign = "left";
+	ctx.textBaseline = "top";
+	ctx.fillStyle = "white";
+	return ctx;
+};
+var RP_FontCtx = (function (RP_WebGLCtx$$1) {
+	function anonymous () {
+		RP_WebGLCtx$$1.apply(this, arguments);
+	}
+
+	if ( RP_WebGLCtx$$1 ) anonymous.__proto__ = RP_WebGLCtx$$1;
+	anonymous.prototype = Object.create( RP_WebGLCtx$$1 && RP_WebGLCtx$$1.prototype );
+	anonymous.prototype.constructor = anonymous;
+
+	var prototypeAccessors = { name: {},key: {} };
+
+	prototypeAccessors.name.get = function () { return "FontCtx"; };
+	prototypeAccessors.key.get = function () { return ("FontCtx_" + (this._canvasId)); };
+
+	Object.defineProperties( anonymous.prototype, prototypeAccessors );
+
+	return anonymous;
+}(RP_WebGLCtx));
+
+var Range = function Range(from, to) {
+	this.from = from;
+	this.to = to;
+};
+
+var prototypeAccessors$11 = { width: {} };
+prototypeAccessors$11.width.get = function () {
+	return this.to - this.from;
+};
+Range.prototype.move = function move (ofs) {
+	this.from += ofs;
+	this.to += ofs;
+};
+
+Object.defineProperties( Range.prototype, prototypeAccessors$11 );
+
+ResourceGenSrc.FontHeight = function(rp) {
+	var c = ResourceGen.get(new RP_FontCtx("fontcanvas"));
+	c.font = rp.font.fontstr;
+
+	var canvas = c.canvas;
+	var cw = canvas.width,
+		ch = canvas.height;
+	c.fillStyle = "black";
+	c.fillRect(0,0, cw, ch);
+	c.fillStyle = "white";
+	c.fillText("あいうえおAEglq", 0, 0);
+	var fw = c.measureText("Eg").width;
+	var pixels = c.getImageData(0, 0, fw, ch);
+
+	var top, bottom;
+	// Find top border
+	Top: for(var i=0 ; i<ch ; i++) {
+		var idx = pixels.width*i * 4;
+		for(var j=0 ; j<pixels.width ; j++) {
+			if(pixels.data[idx+j*4] !== 0) {
+				// found top border
+				top = i;
+				break Top;
+			}
+		}
+	}
+	// Find bottom border
+	Bottom: for(var i$1=ch-1 ; i$1>=0 ; i$1--) {
+		var idx$1 = pixels.width*i$1 * 4;
+		for(var j$1=0 ; j$1<pixels.width ; j$1++) {
+			if(pixels.data[idx$1+j$1*4] !== 0) {
+				// found bottom border
+				bottom = i$1;
+				break Bottom;
+			}
+		}
+	}
+	return new Range(top, bottom+1);
+};
+var RP_FontHeight = (function (ResourceParam$$1) {
+	function anonymous(font) {
+		ResourceParam$$1.call(this);
+		this.font = font;
+	}
+
+	if ( ResourceParam$$1 ) anonymous.__proto__ = ResourceParam$$1;
+	anonymous.prototype = Object.create( ResourceParam$$1 && ResourceParam$$1.prototype );
+	anonymous.prototype.constructor = anonymous;
+
+	var prototypeAccessors = { name: {},key: {} };
+	prototypeAccessors.name.get = function () { return "FontHeight"; };
+	prototypeAccessors.key.get = function () {
+		return ("FontHeight_" + (this.font.fontstr));
+	};
+
+	Object.defineProperties( anonymous.prototype, prototypeAccessors );
+
+	return anonymous;
+}(ResourceParam));
+
+var Rect = function Rect(l,t,r,b) {
+	this.left = l;
+	this.top = t;
+	this.right = r;
+	this.bottom = b;
+};
+
+var prototypeAccessors$13 = { lt: {},rb: {},width: {},height: {} };
+prototypeAccessors$13.lt.get = function () {
+	return new Vec2(this.left, this.top);
+};
+prototypeAccessors$13.rb.get = function () {
+	return new Vec2(this.right, this.bottom);
+};
+prototypeAccessors$13.width.get = function () {
+	return this.right - this.left;
+};
+prototypeAccessors$13.height.get = function () {
+	return this.bottom- this.top;
+};
+Rect.prototype.move = function move (ofs) {
+	this.left += ofs.x;
+	this.right += ofs.x;
+	this.top += ofs.y;
+	this.bottom += ofs.y;
+};
+
+Object.defineProperties( Rect.prototype, prototypeAccessors$13 );
+
+/* global gl */ //! フォントテクスチャのうちの一行分
+var FontLane = function FontLane(w) {
+	this._width = w;
+	this._cur = 0;
+	// CharCode -> Range(X)
+	this._map = {};
+};
+FontLane.prototype.get = function get (code, str, ctx, fw, fh, baseY, tex) {
+	// 既に計算してあればそれを返す
+	{
+		var ret = this._map[code];
+		if(ret)
+			{ return ret; }
+	}
+	// これ以上スペースが無ければnull
+	if(this._cur + fw > this._width)
+		{ return null; }
+
+	ctx.fillStyle = "black";
+	ctx.fillRect(0, 0, fw, fh.to);
+	ctx.fillStyle = "white";
+	ctx.fillText(str, 0, 0);
+
+	var dat = ctx.getImageData(0, fh.from, fw, fh.width);
+	var data = dat.data;
+	var u8data = new Uint8Array(fw * fh.width);
+	for(var i=0 ; i<u8data.length ; i++) {
+		u8data[i] = data[i*4];
+	}
+	gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+	tex.setSubData(
+		0,
+		new Rect(
+			this._cur,
+			baseY,
+			this._cur+fw,
+			baseY+fh.width
+		),
+		glc.E_InterFormat.Alpha,
+		glc.E_TexDataFormat.UB,
+		u8data
+	);
+	// キャッシュに格納
+	var range = new Range(this._cur, this._cur+fw);
+	this._map[code] = range;
+	this._cur += fw;
+	return range;
+};
+//! フォントテクスチャ一枚分(Lane複数)
+var FontPlane = function FontPlane(w, h, laneH) {
+	var this$1 = this;
+
+	Assert$1(h >= laneH);
+	this._laneH = laneH;
+	// ビットマップを保持するテクスチャ
+	var tex = new GLTexture2D();
+	tex.setData(0, glc.E_InterFormat.Alpha, w, h,
+		glc.E_InterFormat.Alpha, glc.E_TexDataFormat.UB, null);
+	tex.setLinear(true, true, 0);
+	this._tex = tex;
+	// hをlaneHの高さで埋められるだけのサイズ(FontLane)配列
+	this._lane = [];
+	var nLane = Math.floor(h/laneH);
+	for(var i=0 ; i<nLane ; i++) {
+		this$1._lane.push(new FontLane(w));
+	}
+	// CharCode -> {UVRect, width, heightR}
+	this._map = {};
+};
+
+var prototypeAccessors$12 = { texture: {} };
+prototypeAccessors$12.texture.get = function () { return this._tex; };
+FontPlane.prototype.get = function get (code, str, ctx, fw, fh) {
+		var this$1 = this;
+
+	// 既に計算してあればそれを返す
+	{
+		var ret = this._map[code];
+		if(ret)
+			{ return ret; }
+	}
+	var tw = this.texture.width,
+		th = this.texture.height;
+	var len = this._lane.length;
+	for(var i=0 ; i<len ; i++) {
+		var lane = this$1._lane[i];
+		var ret$1 = lane.get(code, str, ctx, fw, fh, i*fh.width, this$1.texture);
+		if(ret$1) {
+			var rect = new Rect(ret$1.from, i*this$1._laneH, ret$1.to, (i+1)*this$1._laneH);
+			rect.left /= tw;
+			rect.top /= th;
+			rect.right /= tw;
+			rect.bottom /= th;
+
+			var ret2 = {
+				uvrect: rect,
+				height: fh,
+				width: fw
+			};
+			return this$1._map[code] = ret2;
+		}
+	}
+	// もう入り切るスペースが無ければnullを返す
+	return null;
+};
+
+Object.defineProperties( FontPlane.prototype, prototypeAccessors$12 );
+//! フォントファミリと一体一で対応
+var FontCache = function FontCache(w, h, laneH) {
+	var assign;
+	(assign = [w, h, laneH], this._width = assign[0], this._height = assign[1], this._laneH = assign[2]);
+	// FontPlane配列
+	this._plane = [];
+	this._addNewPlane();
+	// CharCode -> [Texture, UVRect, Size]
+	this._map = {};
+};
+FontCache.prototype._addNewPlane = function _addNewPlane () {
+	this._plane.push(new FontPlane(this._width, this._height, this._laneH));
+};
+/*! \param[in] str 対象の文字列(そのうちの一文字分を処理) */
+FontCache.prototype.get = function get (str, idx, ctx, fh) {
+		var this$1 = this;
+
+	var code = str.charCodeAt(idx);
+	// 既に計算してあればそれを返す
+	{
+		var ret$1 = this._map[code];
+		if(ret$1)
+			{ return ret$1; }
+	}
+	var sstr = str.substr(idx, 1);
+	var fw = ctx.measureText(sstr).width+2;
+	var ret;
+	for(;;) {
+		ret = this$1._plane.back().get(code, sstr, ctx, fw, fh);
+		if(ret)
+			{ break; }
+		this$1._addNewPlane();
+	}
+	// キャッシュに登録
+	ret = {
+		texture: this._plane.back().texture,
+		uvrect: ret.uvrect,
+		height: ret.height,
+		width: ret.width,
+		chara: true,
+		char: str.charAt(idx),
+		code: code
+	};
+	this._map[code] = ret;
+	return ret;
+};
+var FontGen = function FontGen(w, h, laneH) {
+	this._cache = new FontCache(w, h, laneH);
+};
+// \return [{texture,uvrect,height,width}, ...]
+FontGen.prototype.get = function get (str, ctx, fh) {
+		var this$1 = this;
+
+	var ret = [];
+	for(var i=0 ; i<str.length ; i++) {
+		var ch = str.charAt(i);
+		switch(ch) {
+		case "\n":
+			ret.push({
+				chara: false,
+				char: ch,
+				code: str.charAt(i),
+			});
+			break;
+		default:
+			ret.push(this$1._cache.get(str, i, ctx, fh));
+		}
+	}
+	return ret;
+};
+
+/* global gl */
+var GLIBuffer = (function (GLBuffer$$1) {
+	function GLIBuffer () {
+		GLBuffer$$1.apply(this, arguments);
+	}
+
+	if ( GLBuffer$$1 ) GLIBuffer.__proto__ = GLBuffer$$1;
+	GLIBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
+	GLIBuffer.prototype.constructor = GLIBuffer;
+
+	var prototypeAccessors = { typeId: {} };
+
+	prototypeAccessors.typeId.get = function () {
+		return gl.ELEMENT_ARRAY_BUFFER;
+	};
+
+	Object.defineProperties( GLIBuffer.prototype, prototypeAccessors );
+
+	return GLIBuffer;
+}(GLBuffer));
+
+var Size = function Size(w, h) {
+	this.width = w;
+	this.height = h;
+};
+
+/* global gl engine */
+var PlaneSingleDraw = function PlaneSingleDraw(src) {
+	var vbP = new GLVBuffer();
+	vbP.setData(src._position, glc.E_Drawtype.Static);
+	var vbU = new GLVBuffer();
+	vbU.setData(src._uv, glc.E_Drawtype.Static);
+	var ib = new GLIBuffer();
+	ib.setDataRaw(new Uint16Array(src._index), 1, glc.E_Drawtype.Static);
+	var vbT = new GLVBuffer();
+	vbT.setDataRaw(new Float32Array(src._time), 1, glc.E_Drawtype.Static);
+
+	this.texture = src._texture;
+	this.vb = {
+		a_position: vbP,
+		a_uv: vbU,
+		a_time: vbT,
+	};
+	this.ib = ib;
+};
+PlaneSingleDraw.prototype.draw = function draw (offset, time, alpha) {
+		var this$1 = this;
+
+	engine.setUniform("u_texture", this.texture);
+	engine.setUniform("u_screenSize", new Vec2(engine.width, engine.height));
+	engine.setUniform("u_offset", offset);
+	engine.setUniform("u_time", time);
+	engine.setUniform("u_alpha", alpha);
+	engine.draw(function (){ DrawWithGeom(this$1, gl.TRIANGLES); });
+};
+var PlaneSingle = function PlaneSingle(tex) {
+	this._texture = tex;
+	this._position = [];
+	this._uv = [];
+	this._time = [];
+	this._index = [];
+	this._accumTime = 0;	// 総時間
+	this._tpix = new Vec2(0.5/tex.width, 0.5/tex.height);
+};
+PlaneSingle.prototype.add = function add (ofs, fc, t) {
+	var idxBase = this._position.length;
+	{
+		var pos = this._position;
+		pos.push(new Vec2(ofs.x+0.5,	ofs.y+fc.height.from+0.5));
+		pos.push(new Vec2(ofs.x+fc.width-0.5,ofs.y+fc.height.from+0.5));
+		pos.push(new Vec2(ofs.x+0.5,		ofs.y+fc.height.to-0.5));
+		pos.push(new Vec2(ofs.x+fc.width-0.5,ofs.y+fc.height.to-0.5));
+	}
+	{
+		// [xy=テクスチャuv, yz=ローカルUV]
+		var uv = this._uv;
+		var r = fc.uvrect;
+		var tp = this._tpix;
+		uv.push(new Vec4(r.left+tp.x,r.top+tp.y,	0,	0));
+		uv.push(new Vec4(r.right-tp.x,r.top+tp.y,	1,	0));
+		uv.push(new Vec4(r.left+tp.x,r.bottom-tp.y,0,	1));
+		uv.push(new Vec4(r.right-tp.x,r.bottom-tp.y,1,	1));
+	}
+	{
+		var time = this._time;
+		for(var i=0 ; i<4; i++)
+			{ time.push(t); }
+	}
+	this._index = this._index.concat([
+		idxBase+0,
+		idxBase+1,
+		idxBase+3,
+		idxBase+0,
+		idxBase+3,
+		idxBase+2
+	]);
+};
+PlaneSingle.prototype.makeBuffer = function makeBuffer () {
+	return new PlaneSingleDraw(this);
+};
+//! 行毎に文字列を配置
+function CharPlaceLines(fp, lineH, width) {
+	var ret = [];
+	var cur = 0;
+	for(;;) {
+		var to = GetLine(fp, cur);
+		if(cur === to) {
+			break;
+		}
+		var fpL = CharPlace(fp, lineH, new Size(width, 512), cur, to);
+		ret.push(fpL);
+		cur = to+1;
+	}
+	return ret;
+}
+//! 指定された矩形に文字列を配置
+function CharPlace(fp, lineH, size, from, to) {
+	if ( from === void 0 ) from=0;
+	if ( to === void 0 ) to=fp.length;
+
+	// {[texture]: PlaneSingle}
+	var vi = new Map();
+	var cur = new Vec2(0,0);
+	var nl = function (){
+		cur.x = 0;
+		cur.y += lineH;
+		if(cur.y+lineH > size.height) {
+			return false;
+		}
 		return true;
 	};
-	PSpriteObj.prototype.destroy = function destroy () {
-		if(GObject$$1.prototype.destroy.call(this)) {
-			this._draw.destroy();
+	var time = 0;
+	// 実際に配置された矩形サイズ
+	var resultSize = new Size(0,0);
+	// 引数の矩形に収まったかのフラグ
+	var inPlace = true;
+	Place: for(var i=from ; i<to ; i++) {
+		var f = fp[i];
+		if(f.chara) {
+			// 通常の文字コード
+			// 枠を越えるなら改行
+			if(cur.x+f.width > size.width) {
+				if(!nl()) {
+					inPlace = false;
+					break Place;
+				}
+			}
+			var ps = (void 0);
+			if(vi.has(f.texture))
+				{ ps = vi.get(f.texture); }
+			else {
+				ps = new PlaneSingle(f.texture);
+				vi.set(f.texture, ps);
+			}
+			ps.add(cur, f, time++);
+			cur.x += f.width;
+		} else {
+			// 制御文字
+			switch(f.char) {
+			case "\n":
+				// 改行
+				if(!nl()) {
+					inPlace = false;
+					break Place;
+				}
+				break;
+			}
+		}
+	}
+	// 配列に詰め直し
+	var plane = [];
+	var itr = vi.entries();
+	for(;;) {
+		var ent = itr.next();
+		if(ent.done)
+			{ break; }
+		plane.push(ent.value[1].makeBuffer());
+	}
+	return {
+		length: time,
+		plane: plane,
+		inplace: inPlace,
+		resultSize: resultSize,
+	};
+}
+
+var Refresh = function Refresh(def) {
+	var this$1 = this;
+
+	var flagCur = 0x01;
+	this._entry = {};
+	var keys = Object.keys(def);
+	keys.forEach(function (k){
+		this$1._entry[k] = {
+			depend: def[k],	//!< 依存パラメータリスト(string)
+			flag: flagCur,	//!< 該当フラグ値
+			upperFlag: 0,	//!< パラメータを更新した場合にセットするフラグ値(後で計算)
+			lowerFlag: 0,	//!< パラメータを更新した場合にクリアするフラグ値(後で計算)
+			value: null
+		};
+		Assert$1(flagCur <= 0x80000000);
+		flagCur <<= 1;
+	});
+	// Depフラグ計算
+	keys.forEach(function (k){
+		var ent = this$1._entry[k];
+		ent.lowerFlag = this$1._calcLower(k, 0);
+		Assert$1((ent.upperFlag & ent.lowerFlag) === 0);
+		Assert$1((ent.flag & ent.lowerFlag) === ent.flag);
+	});
+	this.reset();
+};
+Refresh.prototype._calcLower = function _calcLower (k, upper) {
+		var this$1 = this;
+
+	var ent = this._entry[k];
+	ent.upperFlag |= upper;
+	var flag = ent.flag;
+	if(ent.depend) {
+		for(var i=0 ; i<ent.depend.length ; i++) {
+			flag |= this$1._calcLower(ent.depend[i], upper|ent.flag);
+		}
+	}
+	return flag;
+};
+Refresh.prototype.reset = function reset () {
+	this._reflag = ~0;
+};
+Refresh.prototype.set = function set (key, value) {
+	var ent = this._entry[key];
+	ent.value = value;
+	this._reflag &= ~ent.lowerFlag;
+	this._reflag |= ent.upperFlag;
+};
+Refresh.prototype.get = function get (key) {
+	var ent = this._entry[key];
+	if(this._reflag & ent.flag) {
+		ent.value = this[("_refresh_" + key)]();
+		this._reflag &= ~ent.flag;
+	}
+	return ent.value;
+};
+
+ResourceGen.TextRect = function() {
+	var buff = {
+		vb: {
+			a_position: new GLVBuffer(),
+			a_uv: new GLVBuffer()
+		},
+		ib: new GLIBuffer()
+	};
+	buff.vb.a_position.setData([
+		new Vec2(0,0),
+		new Vec2(0,1),
+		new Vec2(1,1),
+		new Vec2(1,0)
+	], glc.E_Drawtype.Static);
+	buff.vb.a_uv.setData([
+		new Vec2(0,0),
+		new Vec2(0,1),
+		new Vec2(1,1),
+		new Vec2(1,0)
+	], glc.E_Drawtype.Static);
+	buff.ib.setDataRaw(
+		new Uint16Array([0,1,2, 2,3,0]),
+		1,
+		glc.E_Drawtype.Static
+	);
+	return buff;
+};
+var _ = ResourceGen.TextRect;
+
+window._ = _;
+
+/* global engine */
+//! スクリーン上に配置するテキスト
+/*!
+	[shader requirements]
+	attribute {
+		vec2 a_position;
+		vec4 a_uv;
+		float a_time;
+	}
+	uniform {
+		float u_time;
+		float u_alpha;
+		vec2 u_offset;
+		vec2 u_screenSize;
+		sampler2D u_texture;
+	}
+*/
+var Text = (function (Refresh$$1) {
+	function Text() {
+		Refresh$$1.call(this, {
+			font: null,
+			text: null,
+			size: null,
+			fontheight: ["font"],
+			fontgen: ["fontheight"],
+			fontplane: ["fontheight", "fontgen", "text", "size"],
+			length: ["fontplane"],
+		});
+		this.font = new Font("arial", "30pt", 100, false);
+		this.text = "DefaultText";
+		this.size = new Size(512,512);
+	}
+
+	if ( Refresh$$1 ) Text.__proto__ = Refresh$$1;
+	Text.prototype = Object.create( Refresh$$1 && Refresh$$1.prototype );
+	Text.prototype.constructor = Text;
+
+	var prototypeAccessors = { font: {},text: {},size: {},length: {} };
+	prototypeAccessors.font.set = function (f) { this.set("font", f); };
+	prototypeAccessors.text.set = function (t) { this.set("text", t); };
+	prototypeAccessors.size.set = function (r) { this.set("size", r); };
+	prototypeAccessors.font.get = function () { return this.get("font"); };
+	prototypeAccessors.text.get = function () { return this.get("text"); };
+	prototypeAccessors.size.get = function () { return this.get("size"); };
+	prototypeAccessors.length.get = function () { return this.get("fontplane").length; };
+
+	Text.prototype._refresh_fontheight = function _refresh_fontheight () {
+		return ResourceGen.get(new RP_FontHeight(this.font));
+	};
+	Text.prototype._refresh_fontgen = function _refresh_fontgen () {
+		var fh = this.get("fontheight");
+		return new FontGen(512, 512, fh.width);
+	};
+	Text.prototype._makeFontA = function _makeFontA () {
+		var fh = this.get("fontheight");
+		var gen = this.get("fontgen");
+		var ctx = ResourceGen.get(new RP_FontCtx("fontcanvas"));
+		ctx.font = this.font.fontstr;
+		return {
+			fontA: gen.get(this.text, ctx, fh),
+			fh: fh
+		};
+	};
+	Text.prototype._refresh_fontplane = function _refresh_fontplane () {
+		var fa = this._makeFontA();
+		return CharPlace(fa.fontA, fa.fh.to, this.size);
+	};
+	Text.prototype.draw = function draw (offset, time, alpha) {
+		engine.technique = "text";
+		var plane = this.get("fontplane").plane;
+		for(var i=0 ; i<plane.length ; i++) {
+			plane[i].draw(offset, time, alpha);
+		}
+	};
+
+	Object.defineProperties( Text.prototype, prototypeAccessors );
+
+	return Text;
+}(Refresh));
+var TextLines = (function (Text) {
+	function TextLines() {
+		Text.call(this);
+		// 行ディレイ(1行毎に何秒遅らせるか)
+		this.lineDelay = 0;
+	}
+
+	if ( Text ) TextLines.__proto__ = Text;
+	TextLines.prototype = Object.create( Text && Text.prototype );
+	TextLines.prototype.constructor = TextLines;
+
+	var prototypeAccessors$1 = { length: {} };
+	TextLines.prototype._refresh_fontplane = function _refresh_fontplane () {
+		var fa = Text.prototype._makeFontA.call(this);
+		return CharPlaceLines(fa.fontA, fa.fh.to, this.size);
+	};
+	prototypeAccessors$1.length.get = function () {
+		var this$1 = this;
+
+		var fps = this.get("fontplane");
+		if(fps.length === 0)
+			{ return 0; }
+		var len = 0;
+		for(var i=0 ; i<fps.length ; i++) {
+			len = Math.max(len, fps[i].length + this$1.lineDelay*i);
+		}
+		return len;
+	};
+	TextLines.prototype.draw = function draw (offset, time, alpha) {
+		var this$1 = this;
+
+		engine.technique = "text";
+		var fh = this.get("fontheight");
+		var ps = this.get("fontplane");
+		offset = offset.clone;
+		for(var k=0 ; k<ps.length ; k++) {
+			var plane = ps[k].plane;
+			for(var i=0 ; i<plane.length ; i++) {
+				plane[i].draw(offset, time, alpha);
+				offset.y += fh.to;
+				time -= this$1.lineDelay;
+			}
+		}
+	};
+
+	Object.defineProperties( TextLines.prototype, prototypeAccessors$1 );
+
+	return TextLines;
+}(Text));
+
+var TextDraw = (function (Drawable$$1) {
+	function TextDraw(text) {
+		Drawable$$1.call(this);
+		this.text = text;
+		this.time = 0;
+		this.offset = new Vec2(0,0);
+		this.alpha = 1;
+	}
+
+	if ( Drawable$$1 ) TextDraw.__proto__ = Drawable$$1;
+	TextDraw.prototype = Object.create( Drawable$$1 && Drawable$$1.prototype );
+	TextDraw.prototype.constructor = TextDraw;
+	TextDraw.prototype.advance = function advance (dt) {
+		if(this.time >= this.text.length+8) {
+			return true;
+		}
+		this.time += dt;
+		return false;
+	};
+	TextDraw.prototype.onUpdate = function onUpdate () {
+		if(Drawable$$1.prototype.onUpdate.call(this)) {
+			engine.technique = "text";
+			this.text.draw(this.offset, this.time, this.alpha);
 			return true;
 		}
 		return false;
 	};
 
-	return PSpriteObj;
-}(GObject));
+	return TextDraw;
+}(Drawable));
 
 /* global engine resource */
-var St = (function (State$$1) {
-	function St () {
+// particle dance
+var St_Particle = (function (State$$1) {
+	function St_Particle () {
 		State$$1.apply(this, arguments);
 	}
 
-	if ( State$$1 ) St.__proto__ = State$$1;
-	St.prototype = Object.create( State$$1 && State$$1.prototype );
-	St.prototype.constructor = St;
+	if ( State$$1 ) St_Particle.__proto__ = State$$1;
+	St_Particle.prototype = Object.create( State$$1 && State$$1.prototype );
+	St_Particle.prototype.constructor = St_Particle;
 
-	St.prototype.onUp = function onUp (self) {
-		self.updateGroup.add(new FPSCamera());
-		self.updateGroup.add(new PSpriteObj());
-
-		engine.addTechnique(resource.getResource("prog"));
-
-		self.drawGroup.add(new Clear(0));
+	St_Particle.prototype.onEnter = function onEnter (self/*, prev*/) {
+		var psp = new PSpriteDraw();
+		psp.alpha = 0;
+		self.drawGroup.add(psp);
+		this._alpha = 0;
+		this._psp = psp;
+	};
+	St_Particle.prototype.onUpdate = function onUpdate (self, dt) {
+		this._alpha += dt/2;
+		this._psp.advance(dt);
+		this._psp.alpha = Math.min(1, this._alpha);
+		return true;
 	};
 
-	return St;
+	return St_Particle;
+}(State));
+var St_Fadeout = (function (State$$1) {
+	function St_Fadeout () {
+		State$$1.apply(this, arguments);
+	}
+
+	if ( State$$1 ) St_Fadeout.__proto__ = State$$1;
+	St_Fadeout.prototype = Object.create( State$$1 && State$$1.prototype );
+	St_Fadeout.prototype.constructor = St_Fadeout;
+
+	St_Fadeout.prototype.onEnter = function onEnter () {
+		this._alpha = 1;
+	};
+	St_Fadeout.prototype.onUpdate = function onUpdate (self, dt) {
+		this._alpha -= dt;
+		self._text.alpha = this._alpha;
+		if(this._alpha < 0)
+			{ self.setState(new St_Particle()); }
+	};
+
+	return St_Fadeout;
+}(State));
+// show "HELLO WORLD"
+var St_Text = (function (State$$1) {
+	function St_Text () {
+		State$$1.apply(this, arguments);
+	}
+
+	if ( State$$1 ) St_Text.__proto__ = State$$1;
+	St_Text.prototype = Object.create( State$$1 && State$$1.prototype );
+	St_Text.prototype.constructor = St_Text;
+
+	St_Text.prototype.onUp = function onUp (self) {
+		var t = new TextDraw(new Text());
+		t.priority = 10;
+		var w = engine.width,
+			h = engine.height;
+		var str = "HELLO WORLD";
+		t.text.text = str;
+		t.text.size = new Size(1024, 512);
+		t.offset = new Vec2(200, 300);
+		self.drawGroup.add(t);
+		self._text = t;
+
+		self.updateGroup.add(new FPSCamera());
+		engine.addTechnique(resource.getResource("prog"));
+		self.drawGroup.add(new Clear(0));
+	};
+	St_Text.prototype.onUpdate = function onUpdate (self, dt) {
+		if(self._text.advance(dt*15)) {
+			self.setState(new St_Fadeout());
+		}
+		return true;
+	};
+
+	return St_Text;
 }(State));
 window.onload = function() {
 	var alias = {
@@ -3357,7 +4167,7 @@ window.onload = function() {
 	};
 	var base = "resource";
 	var res = ["sphere", "prog"];
-	var sc = new Scene(0, new St());
+	var sc = new Scene(0, new St_Text());
 	MainLoop_RF(alias, base, function (){
 		return new LoadingScene(res, sc);
 	});
