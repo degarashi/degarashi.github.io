@@ -1,6 +1,6 @@
 {
 	"boolset": [
-		"Blend", "CullFace"
+		"Blend"
 	],
 	"valueset": {
 		"BlendFunc": ["SrcAlpha", "One"]

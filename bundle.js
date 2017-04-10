@@ -1,4185 +1,5201 @@
 (function () {
 'use strict';
 
-//! 一行分を切り出す
+var gl;
+function SetGL(g) { gl = g; }
+var engine;
+function SetEngine(e) { engine = e; }
+var resource;
+function SetResource(r) { resource = r; }
+var input;
+function SetInput(i) { input = i; }
+var scene;
+function SetScene(s) { scene = s; }
+var glres;
+function SetGLRes(r) { glres = r; }
+
+var BaseObject = function BaseObject() {
+    this._bAlive = true;
+};
+BaseObject.prototype.alive = function alive () {
+    return this._bAlive;
+};
+// ------------- from Discardable -------------
+BaseObject.prototype.discard = function discard () {
+    var prev = this._bAlive;
+    this._bAlive = false;
+    return prev;
+};
+BaseObject.prototype.isDiscarded = function isDiscarded () {
+    return !this._bAlive;
+};
+
+// 描画ソートをする為の優先度値など
+var DrawTag = function DrawTag() {
+    this.priority = 0;
+    this.technique = "";
+};
+DrawTag.prototype.apply = function apply () {
+    if (this.technique.length > 0)
+        { engine.setTechnique(this.technique); }
+};
+var DObject = (function (BaseObject$$1) {
+    function DObject() {
+        BaseObject$$1.apply(this, arguments);
+        this.drawtag = new DrawTag();
+    }
+
+    if ( BaseObject$$1 ) DObject.__proto__ = BaseObject$$1;
+    DObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
+    DObject.prototype.constructor = DObject;
+
+    return DObject;
+}(BaseObject));
+
+var Clear = (function (DObject$$1) {
+    function Clear(color, depth, stencil) {
+        DObject$$1.call(this);
+        this.color = color;
+        this.depth = depth;
+        this.stencil = stencil;
+    }
+
+    if ( DObject$$1 ) Clear.__proto__ = DObject$$1;
+    Clear.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    Clear.prototype.constructor = Clear;
+    Clear.prototype.onDraw = function onDraw () {
+        var flag = 0;
+        if (this.color) {
+            var c = this.color;
+            gl.clearColor(c.x, c.y, c.z, c.w);
+            flag |= gl.COLOR_BUFFER_BIT;
+        }
+        if (this.depth) {
+            gl.clearDepth(this.depth);
+            flag |= gl.DEPTH_BUFFER_BIT;
+        }
+        if (this.stencil) {
+            gl.clearStencil(this.stencil);
+            flag |= gl.STENCIL_BUFFER_BIT;
+        }
+        gl.clear(flag);
+    };
+
+    return Clear;
+}(DObject));
+
+// 数学関連のクラス
+var TM;
+(function (TM) {
+    TM.EQUAL_THRESHOLD = 1e-5;
+    function IsEqual(f0, f1) {
+        return Math.abs(f0 - f1) <= TM.EQUAL_THRESHOLD;
+    }
+    TM.IsEqual = IsEqual;
+    function Deg2rad(deg) {
+        return (deg / 180) * Math.PI;
+    }
+    TM.Deg2rad = Deg2rad;
+    function Rad2deg(rad) {
+        return rad / Math.PI * 180;
+    }
+    TM.Rad2deg = Rad2deg;
+    function Square(v) {
+        return v * v;
+    }
+    TM.Square = Square;
+    function GCD(a, b) {
+        if (a === 0 || b === 0)
+            { return 0; }
+        while (a !== b) {
+            if (a > b)
+                { a -= b; }
+            else
+                { b -= a; }
+        }
+        return a;
+    }
+    TM.GCD = GCD;
+    function LCM(a, b) {
+        var div = TM.GCD(a, b);
+        if (div === 0)
+            { return 0; }
+        return (a / div) * b;
+    }
+    TM.LCM = LCM;
+})(TM || (TM = {}));
+var TM$1 = TM;
+
+var VectorImpl = function VectorImpl(n) {
+    var this$1 = this;
+    var elem = [], len = arguments.length - 1;
+    while ( len-- > 0 ) elem[ len ] = arguments[ len + 1 ];
+
+    this.value = new Float32Array(n);
+    for (var i = 0; i < n; i++)
+        { this$1.value[i] = elem[i] || 0; }
+};
+
+var prototypeAccessors = { x: {},y: {},z: {},w: {} };
+VectorImpl.prototype.dim = function dim () {
+    return this.value.length;
+};
+prototypeAccessors.x.get = function () { return this.value[0]; };
+prototypeAccessors.x.set = function (v) { this.value[0] = v; };
+prototypeAccessors.y.get = function () { return this.value[1]; };
+prototypeAccessors.y.set = function (v) { this.value[1] = v; };
+prototypeAccessors.z.get = function () { return this.value[2]; };
+prototypeAccessors.z.set = function (v) { this.value[2] = v; };
+prototypeAccessors.w.get = function () { return this.value[3]; };
+prototypeAccessors.w.set = function (v) { this.value[3] = v; };
+VectorImpl.prototype.clone = function clone () {
+    var ret = new VectorImpl(this.dim());
+    ret.set(this);
+    return ret._asT();
+};
+VectorImpl.prototype._asT = function _asT () {
+    var tmp = this;
+    return tmp;
+};
+VectorImpl.prototype.saturate = function saturate (vmin, vmax) {
+        var this$1 = this;
+
+    var ret = this.clone();
+    var n = this.dim();
+    for (var i = 0; i < n; i++) {
+        var val = this$1.value[i];
+        if (val >= vmax)
+            { this$1.value[i] = vmax; }
+        else if (val <= vmin)
+            { this$1.value[i] = vmin; }
+    }
+    return ret;
+};
+VectorImpl.prototype.equal = function equal (v) {
+        var this$1 = this;
+
+    var n = this.dim();
+    for (var i = 0; i < n; i++) {
+        if (!TM$1.IsEqual(this$1.value[i], v.value[i]))
+            { return false; }
+    }
+    return true;
+};
+VectorImpl.prototype.lerp = function lerp (v, t) {
+        var this$1 = this;
+
+    var n = this.dim();
+    var ret = this.clone();
+    for (var i = 0; i < n; i++)
+        { ret.value[i] = (v.value[i] - this$1.value[i]) * t + this$1.value[i]; }
+    return ret;
+};
+VectorImpl.prototype._unionDuplicate = function _unionDuplicate () {
+    var ret = this.constructor(0);
+    return ret;
+};
+VectorImpl.prototype.set = function set (v) {
+        var this$1 = this;
+
+    var n = this.dim();
+    for (var i = 0; i < n; i++)
+        { this$1.value[i] = v.value[i]; }
+    return this._asT();
+};
+VectorImpl.prototype.add = function add (v) {
+        var this$1 = this;
+
+    var n = this.dim();
+    var ret = this.clone();
+    for (var i = 0; i < n; i++)
+        { ret.value[i] = this$1.value[i] + v.value[i]; }
+    return ret;
+};
+VectorImpl.prototype.addSelf = function addSelf (v) {
+    return this.set(this.add(v));
+};
+VectorImpl.prototype.sub = function sub (v) {
+        var this$1 = this;
+
+    var n = this.dim();
+    var ret = this.clone();
+    for (var i = 0; i < n; i++)
+        { ret.value[i] = this$1.value[i] - v.value[i]; }
+    return ret;
+};
+VectorImpl.prototype.subSelf = function subSelf (v) {
+    return this.set(this.sub(v));
+};
+VectorImpl.prototype.mul = function mul (s) {
+        var this$1 = this;
+
+    var n = this.dim();
+    var ret = this.clone();
+    for (var i = 0; i < n; i++)
+        { ret.value[i] = this$1.value[i] * s; }
+    return ret;
+};
+VectorImpl.prototype.mulSelf = function mulSelf (s) {
+    return this.set(this.mul(s));
+};
+VectorImpl.prototype.div = function div (s) {
+    return this.mul(1 / s);
+};
+VectorImpl.prototype.divSelf = function divSelf (s) {
+    return this.set(this.div(s));
+};
+VectorImpl.prototype.len_sq = function len_sq () {
+    return this.dot(this);
+};
+VectorImpl.prototype.length = function length () {
+    return Math.sqrt(this.len_sq());
+};
+VectorImpl.prototype.normalize = function normalize () {
+    return this.div(this.length());
+};
+VectorImpl.prototype.normalizeSelf = function normalizeSelf () {
+    return this.set(this.normalize());
+};
+VectorImpl.prototype.dot = function dot (v) {
+        var this$1 = this;
+
+    var d = 0;
+    var n = this.dim();
+    for (var i = 0; i < n; i++)
+        { d += this$1.value[i] * v.value[i]; }
+    return d;
+};
+VectorImpl.prototype.minus = function minus () {
+    return this.mul(-1);
+};
+VectorImpl.prototype.toString = function toString () {
+        var this$1 = this;
+
+    var n = this.dim();
+    var ret = "Vector" + n + ":[";
+    var bFirst = true;
+    for (var i = 0; i < n; i++) {
+        if (!bFirst)
+            { ret += ", "; }
+        ret += this$1.value[i];
+        bFirst = false;
+    }
+    return ret + "]";
+};
+
+Object.defineProperties( VectorImpl.prototype, prototypeAccessors );
+
+var Vec2 = (function (VectorImpl$$1) {
+    function Vec2(x, y) {
+        if ( y === void 0 ) y = x;
+
+        VectorImpl$$1.call(this, 2, x, y);
+    }
+
+    if ( VectorImpl$$1 ) Vec2.__proto__ = VectorImpl$$1;
+    Vec2.prototype = Object.create( VectorImpl$$1 && VectorImpl$$1.prototype );
+    Vec2.prototype.constructor = Vec2;
+    Vec2.prototype.clone = function clone () {
+        return new Vec2(this.x, this.y);
+    };
+
+    return Vec2;
+}(VectorImpl));
+
+function PlaceCenter(dstSize, srcSize) {
+    return new Vec2(Math.floor(dstSize.width / 2 - srcSize.width / 2), Math.floor(dstSize.height / 2 - srcSize.height / 2));
+}
+function BlockPlace(dst, dstWidth, dim, px, py, src, srcWidth) {
+    var srcHeight = src.length / srcWidth;
+    for (var i = 0; i < srcHeight; i++) {
+        var db = (i + py) * dstWidth * dim + px * dim;
+        var sb = i * srcWidth * dim;
+        for (var j = 0; j < srcWidth; j++) {
+            for (var k = 0; k < dim; k++)
+                { dst[db + j * dim + k] = src[sb + j * dim + k]; }
+        }
+    }
+}
+// 一行分を切り出す
 function GetLine(fp, from) {
-	var len = fp.length;
-	for(var i=from ; i<len ; i++) {
-		var f = fp[i];
-		if(!f.chara) {
-			if(f.char === "\n")
-				{ return i; }
-		}
-	}
-	return i;
+    var len = fp.length;
+    var i = from;
+    for (; i < len; i++) {
+        var f = fp[i];
+        if (!f.chara) {
+            if (f.char === "\n")
+                { return i; }
+        }
+    }
+    return i;
 }
 
 function PaddingString(n, c) {
-	var str = "";
-	while(n-- > 0)
-		{ str += c; }
-	return str;
+    var str = "";
+    while (n-- > 0)
+        { str += c; }
+    return str;
 }
 function FixedInteger(nAll, num, pad) {
-	if ( pad === void 0 ) pad=" ";
+    if ( pad === void 0 ) pad = " ";
 
-	var str = String(num);
-	var remain = nAll - str.length;
-	if(remain > 0) {
-		str = PaddingString(remain, pad) + str;
-	}
-	return str;
+    var str = String(num);
+    var remain = nAll - str.length;
+    if (remain > 0) {
+        str = PaddingString(remain, pad) + str;
+    }
+    return str;
 }
 function AddLineNumber(src, lineOffset, viewNum, prevLR, postLR) {
-	var res = "";
-	if(prevLR)
-		{ res += "\n"; }
-	var padding = PaddingString(5, " ") + "  ";
-	var srcA = src.split("\n");
-	var srcLen = srcA.length;
-	for(var lnum=0 ; lnum<srcLen ; ++lnum) {
-		if(lnum >= viewNum)
-			{ res += FixedInteger(5, lnum+lineOffset-viewNum) + ": "; }
-		else
-			{ res += padding; }
-		res += (srcA[lnum]) + "\n";
-	}
-	if(postLR)
-		{ res += "\n"; }
-	return res;
+    var res = "";
+    if (src === null)
+        { return res; }
+    if (prevLR)
+        { res += "\n"; }
+    var padding = PaddingString(5, " ") + "  ";
+    var srcA = src.split("\n");
+    var srcLen = srcA.length;
+    for (var lnum = 0; lnum < srcLen; ++lnum) {
+        if (lnum >= viewNum)
+            { res += FixedInteger(5, lnum + lineOffset - viewNum) + ": "; }
+        else
+            { res += padding; }
+        res += (srcA[lnum]) + "\n";
+    }
+    if (postLR)
+        { res += "\n"; }
+    return res;
 }
 
-function Assert$1(cond, msg) {
-	if(!cond)
-		{ throw Error(msg || "assertion failed"); }
+function AssertF(msg) {
+    throw Error(msg || "assertion failed");
+}
+function Assert(cond, msg) {
+    if (!cond)
+        { throw Error(msg || "assertion failed"); }
 }
 function ExtractExtension(fname) {
-	var r = /([a-zA-Z0-9_\-]+\.)+([a-zA-Z0-9_\-]+)/;
-	var r2 = r.exec(fname);
-	if(r2) {
-		return r2[2];
-	}
-	return null;
+    var r = /([a-zA-Z0-9_\-]+\.)+([a-zA-Z0-9_\-]+)/;
+    var r2 = r.exec(fname);
+    if (r2) {
+        return r2[2];
+    }
+    return null;
 }
 function Saturation(val, min, max) {
-	if(val <= min)
-		{ return min; }
-	if(val >= max)
-		{ return max; }
-	return val;
+    if (val <= min)
+        { return min; }
+    if (val >= max)
+        { return max; }
+    return val;
 }
 
 
 function VectorToArray() {
-	var va = [], len = arguments.length;
-	while ( len-- ) va[ len ] = arguments[ len ];
+    var va = [], len = arguments.length;
+    while ( len-- ) va[ len ] = arguments[ len ];
 
-	var n = va.length;
-	if(n === 0)
-		{ return Float32Array(); }
-	if(n === 1)
-		{ return va[0].value; }
-
-	var dim = va[0].dim;
-	Assert$1(dim);
-	var ret = new Float32Array(dim*n);
-	for(var i=0 ; i<n ; i++) {
-		var v = va[i].value;
-		for(var j=0 ; j<dim ; j++) {
-			ret[i*dim+j] = v[j];
-		}
-	}
-	return ret;
+    var n = va.length;
+    if (n === 0)
+        { return new Float32Array(0); }
+    if (n === 1)
+        { return va[0].value; }
+    var dim = va[0].dim();
+    var ret = new Float32Array(dim * n);
+    for (var i = 0; i < n; i++) {
+        var v = va[i].value;
+        for (var j = 0; j < dim; j++) {
+            ret[i * dim + j] = v[j];
+        }
+    }
+    return ret;
 }
 function MatrixToArray() {
-	var ma = [], len = arguments.length;
-	while ( len-- ) ma[ len ] = arguments[ len ];
+    var ma = [], len = arguments.length;
+    while ( len-- ) ma[ len ] = arguments[ len ];
 
-	var n = ma.length;
-	if(n === 0)
-		{ return Float32Array(); }
-	if(n === 1)
-		{ return ma[0].value; }
-
-	var dim_m = ma[0].dim_m,
-		dim_n = ma[0].dim_n;
-	var ret = new Float32Array(dim_m*dim_n*n);
-	for(var i=0 ; i<n ; i++) {
-		var m = ma[i].value;
-		for(var j=0 ; j<dim_m*dim_n ; j++) {
-			ret[i*dim_m*dim_n+j] = m[j];
-		}
-	}
-	return ret;
+    var n = ma.length;
+    if (n === 0)
+        { return new Float32Array(0); }
+    if (n === 1)
+        { return ma[0].value; }
+    var dim_m = ma[0].dim_m(), dim_n = ma[0].dim_n();
+    var ret = new Float32Array(dim_m * dim_n * n);
+    for (var i = 0; i < n; i++) {
+        var m = ma[i].value;
+        for (var j = 0; j < dim_m * dim_n; j++) {
+            ret[i * dim_m * dim_n + j] = m[j];
+        }
+    }
+    return ret;
 }
 function VMToArray(vm) {
-	if(IsMatrix(vm))
-		{ return MatrixToArray(vm); }
-	return VectorToArray(vm);
+    if (IsMatrix(vm))
+        { return MatrixToArray(vm); }
+    return VectorToArray(vm);
 }
 function IsVector(v) {
-	return v.dim !== undefined;
+    return v.dim !== undefined;
 }
 function IsMatrix(m) {
-	return m.dim_m !== undefined;
+    return m.dim_m !== undefined;
 }
 
-var RequestAnimationFrame =
-	window.requestAnimationFrame
-	|| (function(){
-		return window.webkitRequestAnimationFrame ||
-					window.mozRequestAnimationFrame ||
-					window.oRequestAnimationFrame ||
-					window.msRequestAnimationFrame ||
-					function(cb) {
-						window.setTimeout(cb, 1000/60);
-					};
-	})();
+var RequestAnimationFrame = window.requestAnimationFrame
+    || (function () {
+        return window.webkitRequestAnimationFrame ||
+            function (cb) {
+                window.setTimeout(cb, 1000 / 60);
+            };
+    })();
 
-/* global gl engine */
 function DrawWithGeom(geom, flag) {
-	var vbg = geom.vb;
-	var count = 0;
-	for(var name in vbg) {
-		var vb = vbg[name];
-		count = vb.length;
-		engine.program.setVStream(name, vb);
-	}
-	var ib = geom.ib;
-	if(ib) {
-		ib.bind();
-		gl.drawElements(flag, ib.length, ib.type, 0);
-		ib.unbind();
-	} else {
-		gl.drawArrays(flag, 0, count);
-	}
+    var vbg = geom.vbuffer;
+    var count = 0;
+    for (var name in vbg) {
+        var vb = vbg[name];
+        count = vb.nElem();
+        engine.program().setVStream(name, vb);
+    }
+    var ib = geom.ibuffer;
+    if (ib) {
+        ib.proc(function () {
+            gl.drawElements(flag, ib.nElem(), ib.typeinfo().id, 0);
+        });
+    }
+    else {
+        gl.drawArrays(flag, 0, count);
+    }
 }
 
-var GObject = function GObject(p) {
-	if ( p === void 0 ) p=0;
+var Vec3 = (function (VectorImpl$$1) {
+    function Vec3(x, y, z) {
+        if ( y === void 0 ) y = x;
+        if ( z === void 0 ) z = y;
 
-	Assert$1(typeof p === "number");
-	this._priority = p;
-	this._bAlive = true;
+        VectorImpl$$1.call(this, 3, x, y, z);
+    }
+
+    if ( VectorImpl$$1 ) Vec3.__proto__ = VectorImpl$$1;
+    Vec3.prototype = Object.create( VectorImpl$$1 && VectorImpl$$1.prototype );
+    Vec3.prototype.constructor = Vec3;
+    Vec3.prototype.cross = function cross (v) {
+        var x = this.x, y = this.y, z = this.z;
+        var vx = v.x, vy = v.y, vz = v.z;
+        return new Vec3(y * vz - z * vy, z * vx - x * vz, x * vy - y * vx);
+    };
+    Vec3.prototype.clone = function clone () {
+        return new Vec3(this.x, this.y, this.z);
+    };
+
+    return Vec3;
+}(VectorImpl));
+
+var Vec4Impl = (function (VectorImpl$$1) {
+    function Vec4Impl(x, y, z, w) {
+        if ( y === void 0 ) y = x;
+        if ( z === void 0 ) z = y;
+        if ( w === void 0 ) w = z;
+
+        VectorImpl$$1.call(this, 4, x, y, z, w);
+    }
+
+    if ( VectorImpl$$1 ) Vec4Impl.__proto__ = VectorImpl$$1;
+    Vec4Impl.prototype = Object.create( VectorImpl$$1 && VectorImpl$$1.prototype );
+    Vec4Impl.prototype.constructor = Vec4Impl;
+
+    return Vec4Impl;
+}(VectorImpl));
+var Vec4 = (function (Vec4Impl) {
+    function Vec4 () {
+        Vec4Impl.apply(this, arguments);
+    }
+
+    if ( Vec4Impl ) Vec4.__proto__ = Vec4Impl;
+    Vec4.prototype = Object.create( Vec4Impl && Vec4Impl.prototype );
+    Vec4.prototype.constructor = Vec4;
+
+    Vec4.prototype.clone = function clone () {
+        return new Vec4(this.x, this.y, this.z, this.w);
+    };
+
+    return Vec4;
+}(Vec4Impl));
+
+function MakeVector(n) {
+    var args = [], len = arguments.length - 1;
+    while ( len-- > 0 ) args[ len ] = arguments[ len + 1 ];
+
+    switch (n) {
+        case 2:
+            return new Vec2(args[0], args[1]);
+        case 3:
+            return new Vec3(args[0], args[1], args[2]);
+        case 4:
+            return new Vec4(args[0], args[1], args[2], args[3]);
+    }
+    throw new Error("invalid dimension");
+}
+
+var MatrixImpl = function MatrixImpl(m, n) {
+    var this$1 = this;
+    var arg = [], len = arguments.length - 2;
+    while ( len-- > 0 ) arg[ len ] = arguments[ len + 2 ];
+
+    this._m = m;
+    this._n = n;
+    this.value = new Float32Array(m * n);
+    for (var i = 0; i < m * n; i++)
+        { this$1.value[i] = arg[i] || 0; }
+};
+MatrixImpl.prototype.dim_m = function dim_m () {
+    return this._m;
+};
+MatrixImpl.prototype.dim_n = function dim_n () {
+    return this._n;
+};
+MatrixImpl.prototype.set = function set (m) {
+        var this$1 = this;
+
+    var n = this.dim_m() * this.dim_n();
+    for (var i = 0; i < n; i++) {
+        this$1.value[i] = m.value[i];
+    }
+    return this._asT();
+};
+MatrixImpl.prototype.getAt = function getAt (x, y) {
+    return this.value[x * 4 + y];
+};
+MatrixImpl.prototype.setAt = function setAt (x, y, val) {
+    return this.value[x * 4 + y] = val;
+};
+MatrixImpl.prototype.clone = function clone () {
+    var ret = new MatrixImpl(this.dim_m(), this.dim_n());
+    ret.set(this);
+    return ret._asT();
+};
+MatrixImpl.prototype._asT = function _asT () {
+    var tmp = this;
+    return tmp;
+};
+MatrixImpl.prototype._mulMatrix = function _mulMatrix (m) {
+        var this$1 = this;
+
+    var ret = this.clone();
+    var ref = [this.dim_n(), this.dim_m()];
+        var w = ref[0];
+        var h = ref[1];
+    for (var i = 0; i < h; i++) {
+        for (var j = 0; j < w; j++) {
+            var sum = 0;
+            for (var k = 0; k < w; k++) {
+                sum += this$1.getAt(k, i) * m.getAt(j, k);
+            }
+            ret.setAt(j, i, sum);
+        }
+    }
+    return ret;
+};
+MatrixImpl.prototype._mulVector = function _mulVector (v) {
+        var this$1 = this;
+
+    var w = this.dim_n(), h = this.dim_m();
+    var ret = MakeVector(w, 0);
+    for (var i = 0; i < h; i++) {
+        for (var k = 0; k < w; k++) {
+            ret.value[i] += this$1.getAt(k, i) * v.value[k];
+        }
+    }
+    return ret;
+};
+MatrixImpl.prototype._mulFloat = function _mulFloat (f) {
+        var this$1 = this;
+
+    var ret = this.clone();
+    var n = this.dim_m() * this.dim_n();
+    for (var i = 0; i < n; i++)
+        { ret.value[i] = this$1.value[i] * f; }
+    return ret;
+};
+MatrixImpl.prototype.mul = function mul (m) {
+    if (IsMatrix(m))
+        { return this._mulMatrix(m); }
+    if (IsVector(m))
+        { return this._mulVector(m); }
+    Assert(typeof m === "number");
+    return this._mulFloat(m);
+};
+MatrixImpl.prototype.mulSelf = function mulSelf (m) {
+    return this.set(this.mul(m));
+};
+MatrixImpl.prototype.toString = function toString () {
+        var this$1 = this;
+
+    var str = "Matrix:\n";
+    var w = this.dim_n(), h = this.dim_m();
+    for (var i = 0; i < h; i++) {
+        for (var j = 0; j < w; j++) {
+            str += this$1.getAt(j, i);
+            if (j !== w)
+                { str += ", "; }
+        }
+        if (i !== h)
+            { str += "\n"; }
+    }
+    return str;
 };
 
-var prototypeAccessors = { alive: {},priority: {} };
-GObject.prototype.onUpdate = function onUpdate (/*dt*/) {
-	return this.alive;
-};
-GObject.prototype.onDown = function onDown () {};
-GObject.prototype.onUp = function onUp () {};
-GObject.prototype.onConnected = function onConnected () {};
+var NoInvertedMatrix = (function (Error) {
+    function NoInvertedMatrix () {
+        Error.apply(this, arguments);
+    }if ( Error ) NoInvertedMatrix.__proto__ = Error;
+    NoInvertedMatrix.prototype = Object.create( Error && Error.prototype );
+    NoInvertedMatrix.prototype.constructor = NoInvertedMatrix;
 
-GObject.prototype.destroy = function destroy () {
-	var prev = this._bAlive;
-	this._bAlive = false;
-	return prev;
-};
-prototypeAccessors.alive.get = function () {
-	return this._bAlive;
-};
-prototypeAccessors.priority.get = function () {
-	return this._priority;
-};
-prototypeAccessors.priority.set = function (p) {
-	this._priority = p;
-};
+    
 
-Object.defineProperties( GObject.prototype, prototypeAccessors );
+    return NoInvertedMatrix;
+}(Error));
+var Mat44 = (function (MatrixImpl$$1) {
+    function Mat44() {
+        var arg = [], len = arguments.length;
+        while ( len-- ) arg[ len ] = arguments[ len ];
 
-//! 数学関連のクラス
-var TM = {
-	EQUAL_THRESHOLD: 1e-5,
-	IsEqualNum: function(f0, f1) {
-		return Math.abs(f0-f1) <= TM.EQUAL_THRESHOLD;
-	},
-	Deg2rad: function(deg) {
-		return (deg/180) * Math.PI;
-	},
-	Rad2deg: function(rad) {
-		return rad/Math.PI * 180;
-	},
-	Square: function(v) {
-		return v*v;
-	},
-	GCD: function(a, b) {
-		if(a===0 || b===0)
-			{ return 0; }
-		while(a !== b) {
-			if(a > b)	{ a -= b; }
-			else		{ b -= a; }
-		}
-		return a;
-	},
-	LCM: function(a, b) {
-		var div = TM.GCD(a,b);
-		if(div === 0)
-			{ return 0; }
-		return (a / div) * b;
-	}
-};
+        MatrixImpl$$1.apply(this, [ 4, 4 ].concat( arg ));
+    }
 
-var Vec = function Vec(n) {
-	var this$1 = this;
-	var elem = [], len = arguments.length - 1;
-	while ( len-- > 0 ) elem[ len ] = arguments[ len + 1 ];
+    if ( MatrixImpl$$1 ) Mat44.__proto__ = MatrixImpl$$1;
+    Mat44.prototype = Object.create( MatrixImpl$$1 && MatrixImpl$$1.prototype );
+    Mat44.prototype.constructor = Mat44;
 
-	this._value = new Float32Array(n);
-	for(var i=0 ; i<n ; i++)
-		{ this$1._value[i] = elem[i] || 0; }
-};
+    var prototypeAccessors = { _m00: {},_m01: {},_m02: {},_m03: {},_m10: {},_m11: {},_m12: {},_m13: {},_m20: {},_m21: {},_m22: {},_m23: {},_m30: {},_m31: {},_m32: {},_m33: {} };
+    // 行優先
+    Mat44.FromRow = function FromRow (m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31, m32, m33) {
+        return new Mat44(m00, m10, m20, m30, m01, m11, m21, m31, m02, m12, m22, m32, m03, m13, m23, m33);
+    };
+    Mat44.FromVec3s = function FromVec3s (x, y, z) {
+        return new Mat44(x.x, y.x, z.x, 0, x.y, y.y, z.y, 0, x.z, y.z, z.z, 0, 0, 0, 0, 1);
+    };
+    Mat44.FromVec4s = function FromVec4s (x, y, z, w) {
+        return new Mat44(x.x, y.x, z.x, w.x, x.y, y.y, z.y, w.y, x.z, y.z, z.z, w.z, x.w, y.w, z.w, w.w);
+    };
+    Mat44.LookDir = function LookDir (pos, dir, up) {
+        var rdir = up.cross(dir);
+        rdir.normalizeSelf();
+        up = dir.cross(rdir);
+        up.normalizeSelf();
+        return new Mat44(rdir.x, up.x, dir.x, 0, rdir.y, up.y, dir.y, 0, rdir.z, up.z, dir.z, 0, -rdir.dot(pos), -up.dot(pos), -dir.dot(pos), 1);
+    };
+    Mat44.LookAt = function LookAt (pos, at, up) {
+        return Mat44.LookDir(pos, at.sub(pos).normalizeSelf(), up);
+    };
+    Mat44.Scaling = function Scaling (x, y, z) {
+        return new Mat44(x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1);
+    };
+    Mat44.PerspectiveFov = function PerspectiveFov (fov, aspect, znear, zfar) {
+        var h = 1 / Math.tan(fov / 2);
+        var w = h / aspect;
+        var f0 = zfar / (zfar - znear), f1 = -znear * zfar / (zfar - znear);
+        return new Mat44(w, 0, 0, 0, 0, h, 0, 0, 0, 0, f0, 1, 0, 0, f1, 0);
+    };
+    Mat44.Translation = function Translation (x, y, z) {
+        return new Mat44(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1);
+    };
+    Mat44.Rotation = function Rotation (axis, angle) {
+        var C = Math.cos(angle), S = Math.sin(angle), RC = 1 - C;
+        var axis0 = axis.x, axis1 = axis.y, axis2 = axis.z;
+        return Mat44.FromRow(C + TM$1.Square(axis0) * RC, axis0 * axis1 * RC - axis2 * S, axis0 * axis2 * RC + axis1 * S, 0, axis0 * axis1 * RC + axis2 * S, C + TM$1.Square(axis1) * RC, axis1 * axis2 * RC - axis0 * S, 0, axis0 * axis2 * RC - axis1 * S, axis1 * axis2 * RC + axis0 * S, C + TM$1.Square(axis2) * RC, 0, 0, 0, 0, 1);
+    };
+    Mat44.RotationX = function RotationX (angle) {
+        return Mat44.Rotation(new Vec3(1, 0, 0), angle);
+    };
+    Mat44.RotationY = function RotationY (angle) {
+        return Mat44.Rotation(new Vec3(0, 1, 0), angle);
+    };
+    Mat44.RotationZ = function RotationZ (angle) {
+        return Mat44.Rotation(new Vec3(0, 0, 1), angle);
+    };
+    Mat44.Zero = function Zero () {
+        return new Mat44(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    };
+    Mat44.Identity = function Identity () {
+        return new Mat44(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+    };
+    Mat44.Iterate = function Iterate (f) {
+        for (var i = 0; i < 4; i++) {
+            for (var j = 0; j < 4; j++)
+                { f(j, i); }
+        }
+    };
+    prototypeAccessors._m00.get = function () { return this.value[0]; };
+    prototypeAccessors._m01.get = function () { return this.value[4]; };
+    prototypeAccessors._m02.get = function () { return this.value[8]; };
+    prototypeAccessors._m03.get = function () { return this.value[12]; };
+    prototypeAccessors._m10.get = function () { return this.value[0 + 1]; };
+    prototypeAccessors._m11.get = function () { return this.value[4 + 1]; };
+    prototypeAccessors._m12.get = function () { return this.value[8 + 1]; };
+    prototypeAccessors._m13.get = function () { return this.value[12 + 1]; };
+    prototypeAccessors._m20.get = function () { return this.value[0 + 2]; };
+    prototypeAccessors._m21.get = function () { return this.value[4 + 2]; };
+    prototypeAccessors._m22.get = function () { return this.value[8 + 2]; };
+    prototypeAccessors._m23.get = function () { return this.value[12 + 2]; };
+    prototypeAccessors._m30.get = function () { return this.value[0 + 3]; };
+    prototypeAccessors._m31.get = function () { return this.value[4 + 3]; };
+    prototypeAccessors._m32.get = function () { return this.value[8 + 3]; };
+    prototypeAccessors._m33.get = function () { return this.value[12 + 3]; };
+    Mat44.prototype.determinant = function determinant () {
+        return this._m00 * this._m11 * this._m22 * this._m33 + this._m00 * this._m12 * this._m23 * this._m31 + this._m00 * this._m13 * this._m21 * this._m32
+            + this._m01 * this._m10 * this._m23 * this._m32 + this._m01 * this._m12 * this._m20 * this._m33 + this._m01 * this._m13 * this._m22 * this._m30
+            + this._m02 * this._m10 * this._m21 * this._m33 + this._m02 * this._m11 * this._m23 * this._m30 + this._m02 * this._m13 * this._m20 * this._m31
+            + this._m03 * this._m10 * this._m22 * this._m31 + this._m03 * this._m11 * this._m20 * this._m32 + this._m03 * this._m12 * this._m21 * this._m30
+            - this._m00 * this._m11 * this._m23 * this._m32 - this._m00 * this._m12 * this._m21 * this._m33 - this._m00 * this._m13 * this._m22 * this._m31
+            - this._m01 * this._m10 * this._m22 * this._m33 - this._m01 * this._m12 * this._m23 * this._m30 - this._m01 * this._m13 * this._m20 * this._m32
+            - this._m02 * this._m10 * this._m23 * this._m31 - this._m02 * this._m11 * this._m20 * this._m33 - this._m02 * this._m13 * this._m21 * this._m30
+            - this._m03 * this._m10 * this._m21 * this._m32 - this._m03 * this._m11 * this._m22 * this._m30 - this._m03 * this._m12 * this._m20 * this._m31;
+    };
+    Mat44.prototype.invert = function invert () {
+        var det = this.determinant();
+        if (Math.abs(det) > 1e-5) {
+            var b = [
+                this._m11 * this._m22 * this._m33 + this._m12 * this._m23 * this._m31 + this._m13 * this._m21 * this._m32 - this._m11 * this._m23 * this._m32 - this._m12 * this._m21 * this._m33 - this._m13 * this._m22 * this._m31,
+                this._m01 * this._m23 * this._m32 + this._m02 * this._m21 * this._m33 + this._m03 * this._m22 * this._m31 - this._m01 * this._m22 * this._m33 - this._m02 * this._m23 * this._m31 - this._m03 * this._m21 * this._m32,
+                this._m01 * this._m12 * this._m33 + this._m02 * this._m13 * this._m31 + this._m03 * this._m11 * this._m32 - this._m01 * this._m13 * this._m32 - this._m02 * this._m11 * this._m33 - this._m03 * this._m12 * this._m31,
+                this._m01 * this._m13 * this._m22 + this._m02 * this._m11 * this._m23 + this._m03 * this._m12 * this._m21 - this._m01 * this._m12 * this._m23 - this._m02 * this._m13 * this._m21 - this._m03 * this._m11 * this._m22,
+                this._m10 * this._m23 * this._m32 + this._m12 * this._m20 * this._m33 + this._m13 * this._m22 * this._m30 - this._m10 * this._m22 * this._m33 - this._m12 * this._m23 * this._m30 - this._m13 * this._m20 * this._m32,
+                this._m00 * this._m22 * this._m33 + this._m02 * this._m23 * this._m30 + this._m03 * this._m20 * this._m32 - this._m00 * this._m23 * this._m32 - this._m02 * this._m20 * this._m33 - this._m03 * this._m22 * this._m30,
+                this._m00 * this._m13 * this._m32 + this._m02 * this._m10 * this._m33 + this._m03 * this._m12 * this._m30 - this._m00 * this._m12 * this._m33 - this._m02 * this._m13 * this._m30 - this._m03 * this._m10 * this._m32,
+                this._m00 * this._m12 * this._m23 + this._m02 * this._m13 * this._m20 + this._m03 * this._m10 * this._m22 - this._m00 * this._m13 * this._m22 - this._m02 * this._m10 * this._m23 - this._m03 * this._m12 * this._m20,
+                this._m10 * this._m21 * this._m33 + this._m11 * this._m23 * this._m30 + this._m13 * this._m20 * this._m31 - this._m10 * this._m23 * this._m31 - this._m11 * this._m20 * this._m33 - this._m13 * this._m21 * this._m30,
+                this._m00 * this._m23 * this._m31 + this._m01 * this._m20 * this._m33 + this._m03 * this._m21 * this._m30 - this._m00 * this._m21 * this._m33 - this._m01 * this._m23 * this._m30 - this._m03 * this._m20 * this._m31,
+                this._m00 * this._m11 * this._m33 + this._m01 * this._m13 * this._m30 + this._m03 * this._m10 * this._m31 - this._m00 * this._m13 * this._m31 - this._m01 * this._m10 * this._m33 - this._m03 * this._m11 * this._m30,
+                this._m00 * this._m13 * this._m21 + this._m01 * this._m10 * this._m23 + this._m03 * this._m11 * this._m20 - this._m00 * this._m11 * this._m23 - this._m01 * this._m13 * this._m20 - this._m03 * this._m10 * this._m21,
+                this._m10 * this._m22 * this._m31 + this._m11 * this._m20 * this._m32 + this._m12 * this._m21 * this._m30 - this._m10 * this._m21 * this._m32 - this._m11 * this._m22 * this._m30 - this._m12 * this._m20 * this._m31,
+                this._m00 * this._m21 * this._m32 + this._m01 * this._m22 * this._m30 + this._m02 * this._m20 * this._m31 - this._m00 * this._m22 * this._m31 - this._m01 * this._m20 * this._m32 - this._m02 * this._m21 * this._m30,
+                this._m00 * this._m12 * this._m31 + this._m01 * this._m10 * this._m32 + this._m02 * this._m11 * this._m30 - this._m00 * this._m11 * this._m32 - this._m01 * this._m12 * this._m30 - this._m02 * this._m10 * this._m31,
+                this._m00 * this._m11 * this._m22 + this._m01 * this._m12 * this._m20 + this._m02 * this._m10 * this._m21 - this._m00 * this._m12 * this._m21 - this._m01 * this._m10 * this._m22 - this._m02 * this._m11 * this._m20
+            ];
+            det = 1 / det;
+            for (var i = 0; i < b.length; i++)
+                { b[i] *= det; }
+            return Mat44.FromRow(b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+        }
+        throw new NoInvertedMatrix();
+    };
+    Mat44.prototype.transposeSelf = function transposeSelf () {
+        var this$1 = this;
 
-var prototypeAccessors$1 = { dim: {},x: {},y: {},z: {},w: {},value: {},len_sq: {},length: {},clone: {} };
-prototypeAccessors$1.dim.get = function () { return this._value.length; };
-prototypeAccessors$1.x.get = function () { return this._value[0]; };
-prototypeAccessors$1.x.set = function (v) { this._value[0] = v; };
-prototypeAccessors$1.y.get = function () { return this._value[1]; };
-prototypeAccessors$1.y.set = function (v) { this._value[1] = v; };
-prototypeAccessors$1.z.get = function () { return this._value[2]; };
-prototypeAccessors$1.z.set = function (v) { this._value[2] = v; };
-prototypeAccessors$1.w.get = function () { return this._value[3]; };
-prototypeAccessors$1.w.set = function (v) { this._value[3] = v; };
-prototypeAccessors$1.value.get = function () { return this._value; };
-Vec.prototype.saturate = function saturate (vmin, vmax) {
-		var this$1 = this;
+        for (var i = 0; i < 4; i++) {
+            for (var j = i; j < 4; j++) {
+                var tmp = this$1.getAt(i, j);
+                this$1.setAt(i, j, this$1.getAt(j, i));
+                this$1.setAt(j, i, tmp);
+            }
+        }
+        return this;
+    };
+    Mat44.prototype.transform3 = function transform3 (v) {
+        var this$1 = this;
 
-	var n = this.dim;
-	for(var i=0 ; i<n; i++) {
-		var val = this$1._value[i];
-		if(val >= vmax)
-			{ this$1._value[i] = vmax; }
-		else if(val <= vmin)
-			{ this$1._value[i] = vmin; }
-	}
-};
-Vec.prototype.equal = function equal (v) {
-		var this$1 = this;
+        var ret = new Vec3(this.getAt(0, 3), this.getAt(1, 3), this.getAt(2, 3));
+        for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++)
+                { ret.value[i] += this$1.getAt(i, j) * v.value[j]; }
+        }
+        return ret;
+    };
 
-	var n = this.dim;
-	for(var i=0 ; i<n ; i++) {
-		if(!TM.IsEqualNum(this$1._value[i], v._value[i]))
-			{ return false; }
-	}
-	return true;
-};
-Vec.prototype.lerp = function lerp (v, t) {
-		var this$1 = this;
+    Object.defineProperties( Mat44.prototype, prototypeAccessors );
 
-	var n = this.dim;
-	for(var i=0 ; i<n ; i++)
-		{ this$1._value[i] = (v._value[i]-this$1._value[i])*t + this$1._value[i]; }
-};
-Vec.prototype.set = function set (v) {
-		var this$1 = this;
+    return Mat44;
+}(MatrixImpl));
 
-	var n = this.dim;
-	for(var i=0 ; i<n ; i++)
-		{ this$1._value[i] = v._value[i]; }
-};
-Vec.prototype.add = function add (v) {
-		var this$1 = this;
+// クォータニオンクラス
+var Quat = (function (Vec4Impl$$1) {
+    function Quat(x, y, z, w) {
+        Vec4Impl$$1.call(this, x, y, z, w);
+    }
 
-	var n = this.dim;
-	var ret = this.clone;
-	for(var i=0 ; i<n ; i++)
-		{ ret._value[i] = this$1._value[i] + v._value[i]; }
-	return ret;
-};
-Vec.prototype.addSelf = function addSelf (v) {
-	this.set(this.add(v));
-	return this;
-};
-Vec.prototype.sub = function sub (v) {
-		var this$1 = this;
+    if ( Vec4Impl$$1 ) Quat.__proto__ = Vec4Impl$$1;
+    Quat.prototype = Object.create( Vec4Impl$$1 && Vec4Impl$$1.prototype );
+    Quat.prototype.constructor = Quat;
 
-	var n = this.dim;
-	var ret = this.clone;
-	for(var i=0 ; i<n ; i++)
-		{ ret._value[i] = this$1._value[i] - v._value[i]; }
-	return ret;
-};
-Vec.prototype.subSelf = function subSelf (v) {
-	this.set(this.sub(v));
-	return this;
-};
-Vec.prototype.mul = function mul (s) {
-		var this$1 = this;
+    var prototypeAccessors = { elem00: {},elem01: {},elem02: {},elem10: {},elem11: {},elem12: {},elem20: {},elem21: {},elem22: {} };
+    Quat.Identity = function Identity () {
+        return new Quat(0, 0, 0, 1);
+    };
 
-	var n = this.dim;
-	var ret = this.clone;
-	for(var i=0 ; i<n ; i++)
-		{ ret._value[i] = this$1._value[i] * s; }
-	return ret;
-};
-Vec.prototype.mulSelf = function mulSelf (s) {
-	this.set(this.mul(s));
-	return this;
-};
-Vec.prototype.div = function div (s) {
-	return this.mul(1/s);
-};
-Vec.prototype.divSelf = function divSelf (s) {
-	this.set(this.div(s));
-	return this;
-};
-prototypeAccessors$1.len_sq.get = function () {
-	return this.dot(this);
-};
-prototypeAccessors$1.length.get = function () {
-	return Math.sqrt(this.len_sq);
-};
-Vec.prototype.normalize = function normalize () {
-	return this.div(this.length);
-};
-Vec.prototype.normalizeSelf = function normalizeSelf () {
-	this.set(this.normalize());
-	return this;
-};
-prototypeAccessors$1.clone.get = function () {
-	var ret = new this.constructor();
-	ret.set(this);
-	return ret;
-};
-Vec.prototype.dot = function dot (v) {
-		var this$1 = this;
+    Quat.RotationYPR = function RotationYPR (yaw, pitch, roll) {
+        var q = Quat.Identity();
+        // roll
+        q.rotateSelfZ(roll);
+        // pitch
+        q.rotateSelfX(-pitch);
+        // yaw
+        q.rotateSelfY(yaw);
+        return q;
+    };
+    Quat.prototype.set = function set (q) {
+        var assign;
+        (assign = [q.x, q.y, q.z, q.w], this.x = assign[0], this.y = assign[1], this.z = assign[2], this.w = assign[3]);
+        return this;
+    };
+    Quat.prototype.conjugate = function conjugate () {
+        return new Quat(-this.value[0], -this.value[1], -this.value[2], this.value[3]);
+    };
+    prototypeAccessors.elem00.get = function () { return (1 - 2 * this.y * this.y - 2 * this.z * this.z); };
+    prototypeAccessors.elem01.get = function () { return (2 * this.x * this.y + 2 * this.w * this.z); };
+    prototypeAccessors.elem02.get = function () { return (2 * this.x * this.z - 2 * this.w * this.y); };
+    prototypeAccessors.elem10.get = function () { return (2 * this.x * this.y - 2 * this.w * this.z); };
+    prototypeAccessors.elem11.get = function () { return (1 - 2 * this.x * this.x - 2 * this.z * this.z); };
+    prototypeAccessors.elem12.get = function () { return (2 * this.y * this.z + 2 * this.w * this.x); };
+    prototypeAccessors.elem20.get = function () { return (2 * this.x * this.z + 2 * this.w * this.y); };
+    prototypeAccessors.elem21.get = function () { return (2 * this.y * this.z - 2 * this.w * this.x); };
+    prototypeAccessors.elem22.get = function () { return (1 - 2 * this.x * this.x - 2 * this.y * this.y); };
+    // 回転を行列表現した時のX軸
+    Quat.prototype.xaxis = function xaxis () {
+        return new Vec3(this.elem00, this.elem10, this.elem20);
+    };
+    // 正規直行座標に回転を掛けた後のX軸
+    Quat.prototype.xaxisinv = function xaxisinv () {
+        return new Vec3(this.elem00, this.elem01, this.elem02);
+    };
+    // 回転を行列表現した時のY軸
+    Quat.prototype.yaxis = function yaxis () {
+        return new Vec3(this.elem01, this.elem11, this.elem21);
+    };
+    // 正規直行座標に回転を掛けた後のY軸
+    Quat.prototype.yaxisinv = function yaxisinv () {
+        return new Vec3(this.elem10, this.elem11, this.elem12);
+    };
+    // 回転を行列表現した時のZ軸
+    Quat.prototype.zaxis = function zaxis () {
+        return new Vec3(this.elem02, this.elem12, this.elem22);
+    };
+    // 正規直行座標に回転を掛けた後のZ軸
+    Quat.prototype.zaxisinv = function zaxisinv () {
+        return new Vec3(this.elem20, this.elem21, this.elem22);
+    };
+    // X軸に回転を適用したベクトル
+    Quat.prototype.right = function right () {
+        return new Vec3(this.elem00, this.elem01, this.elem02);
+    };
+    // Y軸に回転を適用したベクトル
+    Quat.prototype.up = function up () {
+        return new Vec3(this.elem10, this.elem11, this.elem12);
+    };
+    // Z軸に回転を適用したベクトル
+    Quat.prototype.dir = function dir () {
+        return new Vec3(this.elem20, this.elem21, this.elem22);
+    };
+    // 行列変換(4x4)
+    Quat.prototype.matrix44 = function matrix44 () {
+        return new Mat44(this.elem00, this.elem01, this.elem02, 0, this.elem10, this.elem11, this.elem12, 0, this.elem20, this.elem21, this.elem22, 0, 0, 0, 0, 1);
+    };
+    Quat.prototype.conjugateSelf = function conjugateSelf () {
+        return this.set(this.conjugate());
+    };
+    Quat.prototype.rotateX = function rotateX (a) {
+        return this.rotate(new Vec3(1, 0, 0), a);
+    };
+    Quat.prototype.rotateY = function rotateY (a) {
+        return this.rotate(new Vec3(0, 1, 0), a);
+    };
+    Quat.prototype.rotateZ = function rotateZ (a) {
+        return this.rotate(new Vec3(0, 0, 1), a);
+    };
+    Quat.prototype.rotateSelfX = function rotateSelfX (a) {
+        return this.set(this.rotateX(a));
+    };
+    Quat.prototype.rotateSelfY = function rotateSelfY (a) {
+        return this.set(this.rotateY(a));
+    };
+    Quat.prototype.rotateSelfZ = function rotateSelfZ (a) {
+        return this.set(this.rotateZ(a));
+    };
+    Quat.prototype.rotateSelf = function rotateSelf (axis, a) {
+        return this.set(this.rotate(axis, a));
+    };
+    Quat.RotateX = function RotateX (a) {
+        return Quat.Rotate(new Vec3(1, 0, 0), a);
+    };
+    Quat.RotateY = function RotateY (a) {
+        return Quat.Rotate(new Vec3(0, 1, 0), a);
+    };
+    Quat.RotateZ = function RotateZ (a) {
+        return Quat.Rotate(new Vec3(0, 0, 1), a);
+    };
+    Quat.Rotate = function Rotate (axis, a) {
+        var C = Math.cos(a / 2), S = Math.sin(a / 2);
+        axis = axis.mul(S);
+        return new Quat(axis.x, axis.y, axis.z, C);
+    };
+    Quat.prototype.rotate = function rotate (axis, a) {
+        return Quat.Rotate(axis, a).mul(this);
+    };
+    Quat.prototype.angle = function angle () {
+        return Math.acos(Saturation(this.w, -1, 1)) * 2;
+    };
+    Quat.prototype.axis = function axis () {
+        var s_theta = Math.sqrt(1 - this.w * this.w);
+        if (s_theta < 0.0001)
+            { throw new Error("no valid axis"); }
+        s_theta = 1 / s_theta;
+        return new Vec3(this.x * s_theta, this.y * s_theta, this.z * s_theta);
+    };
+    Quat.prototype.mul = function mul (q) {
+        if (q instanceof Quat) {
+            return new Quat(this.w * q.x + this.x * q.w + this.y * q.z - this.z * q.y, this.w * q.y - this.x * q.z + this.y * q.w + this.z * q.x, this.w * q.z + this.x * q.y - this.y * q.x + this.z * q.w, this.w * q.w - this.x * q.x - this.y * q.y - this.z * q.z);
+        }
+        else if (typeof q === "number") {
+            return Vec4Impl$$1.prototype.mul.call(this, q);
+        }
+        else if (q instanceof Vec3) {
+            var q0 = new Quat(q.x, q.y, q.z, 0);
+            return (this.mul(q0).mul(this.invert())).vector;
+        }
+        throw new Error("invalid argument");
+    };
+    Quat.prototype.mulSelf = function mulSelf (q) {
+        return this.set(this.mul(q));
+    };
+    Quat.prototype.divSelf = function divSelf (q) {
+        return this.set(this.div(q));
+    };
+    Quat.prototype.add = function add (q) {
+        return Vec4Impl$$1.prototype.add.call(this, q);
+    };
+    Quat.prototype.sub = function sub (q) {
+        return Vec4Impl$$1.prototype.sub.call(this, q);
+    };
+    Quat.prototype.vector = function vector () {
+        this.divSelf(new Quat(0, 0, 0, 0));
+        return new Vec3(this.x, this.y, this.z);
+    };
+    Quat.prototype.invert = function invert () {
+        return this.conjugate().divSelf(this.len_sq());
+    };
+    Quat.prototype.invertSelf = function invertSelf () {
+        return this.set(this.invert());
+    };
+    // 球面線形補間
+    Quat.prototype.slerp = function slerp (q, t) {
+        var ac = Saturation(this.dot(q), 0, 1);
+        var theta = Math.acos(ac), S = Math.sin(theta);
+        if (Math.abs(S) < 0.001)
+            { return this.clone; }
+        var rq = this.mul(Math.sin(theta * (1 - t)) / S);
+        rq.addSelf(q.mul(Math.sin(theta * t) / S));
+        return rq;
+    };
+    Quat.prototype.clone = function clone () {
+        return new Quat(this.x, this.y, this.z, this.w);
+    };
 
-	var d = 0;
-	var n = this.dim;
-	for(var i=0 ; i<n ; i++)
-		{ d += this$1._value[i] * v._value[i]; }
-	return d;
-};
-Vec.prototype.minus = function minus () {
-	return this.mul(-1);
-};
-Vec.prototype.toString = function toString () {
-		var this$1 = this;
+    Object.defineProperties( Quat.prototype, prototypeAccessors );
 
-	var n = this.dim;
-	var ret = "Vector" + n + ":[";
-	var bFirst = true;
-	for(var i=0 ; i<n ; i++) {
-		if(!bFirst)
-			{ ret += ", "; }
-		ret += this$1._value[i];
-		bFirst = false;
-	}
-	return ret + "]";
-};
+    return Quat;
+}(Vec4Impl));
 
-Object.defineProperties( Vec.prototype, prototypeAccessors$1 );
-
-var Vec3 = (function (Vec$$1) {
-	function Vec3(x,y,z) {
-		Vec$$1.call(this, 3, x,y,z);
-	}
-
-	if ( Vec$$1 ) Vec3.__proto__ = Vec$$1;
-	Vec3.prototype = Object.create( Vec$$1 && Vec$$1.prototype );
-	Vec3.prototype.constructor = Vec3;
-
-	Vec3.One = function One (n) {
-		return new Vec3(n,n,n);
-	};
-
-	Vec3.prototype.cross = function cross (v) {
-		var x=this.x,
-			y=this.y,
-			z=this.z;
-		var vx = v.x,
-			vy = v.y,
-			vz = v.z;
-		return new Vec3(
-			y*vz - z*vy,
-			z*vx - x*vz,
-			x*vy - y*vx
-		);
-	};
-
-	return Vec3;
-}(Vec));
-
-/* global gl */
-var Clear = (function (GObject$$1) {
-	function Clear(p, c, d, s) {
-		GObject$$1.call(this, p);
-		this.color = c;
-		this.depth = d;
-		this.stencil = s;
-	}
-
-	if ( GObject$$1 ) Clear.__proto__ = GObject$$1;
-	Clear.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	Clear.prototype.constructor = Clear;
-
-	var prototypeAccessors = { stencil: {},depth: {},color: {} };
-	prototypeAccessors.stencil.set = function (s) {
-		this._stencil = s;
-	};
-	prototypeAccessors.depth.set = function (d) {
-		this._depth = d;
-	};
-	prototypeAccessors.color.set = function (c) {
-		this._color = (c && c.clone) || new Vec3(0,0,0);
-	};
-	Clear.prototype.onUpdate = function onUpdate (dt) {
-		var flag = 0;
-		if(this._color) {
-			var c = this._color;
-			gl.clearColor(c[0], c[1], c[2], 1);
-			flag |= gl.COLOR_BUFFER_BIT;
-		}
-		if(this._depth) {
-			gl.clearDepth(this._depth);
-			flag |= gl.DEPTH_BUFFER_BIT;
-		}
-		if(this._stencil) {
-			gl.clearStencil(this._stencil);
-			flag |= gl.STENCIL_BUFFER_BIT;
-		}
-		gl.clear(flag);
-		return GObject$$1.prototype.onUpdate.call(this, dt);
-	};
-
-	Object.defineProperties( Clear.prototype, prototypeAccessors );
-
-	return Clear;
-}(GObject));
-
-var Mat = function Mat(m,n) {
-	var this$1 = this;
-	var arg = [], len = arguments.length - 2;
-	while ( len-- > 0 ) arg[ len ] = arguments[ len + 2 ];
-
-	this._value = new Float32Array(m*n);
-	Assert$1(arg.length === m*n);
-	for(var i=0 ; i<m*n ; i++)
-		{ this$1._value[i] = arg[i]; }
-};
-
-var prototypeAccessors$5 = { value: {} };
-prototypeAccessors$5.value.get = function () { return this._value; };
-
-Object.defineProperties( Mat.prototype, prototypeAccessors$5 );
-
-var Vec4 = (function (Vec$$1) {
-	function Vec4(x,y,z,w) {
-		Vec$$1.call(this, 4, x,y,z,w);
-	}
-
-	if ( Vec$$1 ) Vec4.__proto__ = Vec$$1;
-	Vec4.prototype = Object.create( Vec$$1 && Vec$$1.prototype );
-	Vec4.prototype.constructor = Vec4;
-
-	Vec4.One = function One (n) {
-		return new Vec4(n,n,n,n);
-	};
-
-	return Vec4;
-}(Vec));
-
-//! ------------------- 行列関連クラス定義 ------------------- 
-//! 列優先4x4行列
-var Mat44 = (function (Mat$$1) {
-	function Mat44() {
-		var arg = [], len = arguments.length;
-		while ( len-- ) arg[ len ] = arguments[ len ];
-
-		Mat$$1.apply(this, [ 4,4 ].concat( arg ));
-	}
-
-	if ( Mat$$1 ) Mat44.__proto__ = Mat$$1;
-	Mat44.prototype = Object.create( Mat$$1 && Mat$$1.prototype );
-	Mat44.prototype.constructor = Mat44;
-
-	var prototypeAccessors = { dim_m: {},dim_n: {},_m00: {},_m01: {},_m02: {},_m03: {},_m10: {},_m11: {},_m12: {},_m13: {},_m20: {},_m21: {},_m22: {},_m23: {},_m30: {},_m31: {},_m32: {},_m33: {},determinant: {},invert: {},clone: {} };
-	prototypeAccessors.dim_m.get = function () {
-		return 4;
-	};
-	prototypeAccessors.dim_n.get = function () {
-		return 4;
-	};
-	//! 行優先
-	Mat44.FromRow = function FromRow (
-		m00, m01, m02, m03,
-		m10, m11, m12, m13,
-		m20, m21, m22, m23,
-		m30, m31, m32, m33
-	) {
-		return new Mat44(
-			m00, m10, m20, m30,
-			m01, m11, m21, m31,
-			m02, m12, m22, m32,
-			m03, m13, m23, m33
-		);
-	};
-	Mat44.FromVec3s = function FromVec3s (x, y, z) {
-		return new Mat44(
-			x.x, y.x, z.x, 0,
-			x.y, y.y, z.y, 0,
-			x.z, y.z, z.z, 0,
-			0, 0, 0, 1
-		);
-	};
-	Mat44.FromVec4s = function FromVec4s (x, y, z, w) {
-		return new Mat44(
-			x.x, y.x, z.x, w.x,
-			x.y, y.y, z.y, w.y,
-			x.z, y.z, z.z, w.z,
-			x.w, y.w, z.w, w.w
-		);
-	};
-	Mat44.LookDir = function LookDir (pos, dir, up) {
-		var rdir = up.cross(dir);
-		rdir.normalizeSelf();
-		up = dir.cross(rdir);
-		up.normalizeSelf();
-		return new Mat44(
-			rdir.x, up.x, dir.x, 0,
-			rdir.y, up.y, dir.y, 0,
-			rdir.z, up.z, dir.z, 0,
-			-rdir.dot(pos), -up.dot(pos), -dir.dot(pos), 1
-		);
-	};
-	Mat44.LookAt = function LookAt (pos, at, up) {
-		return Mat44.LookDir(pos, at.sub(pos).normalizeSelf(), up);
-	};
-	Mat44.Scaling = function Scaling (x,y,z) {
-		return new Mat44(
-			x,0,0,0,
-			0,y,0,0,
-			0,0,z,0,
-			0,0,0,1
-		);
-	};
-	Mat44.PerspectiveFov = function PerspectiveFov (fov, aspect, znear, zfar) {
-		var h = 1 / Math.tan(fov/2);
-		var w = h / aspect;
-		var f0 = zfar / (zfar - znear),
-			f1 = -znear * zfar/(zfar - znear);
-		return new Mat44(
-			w, 0, 0, 0,
-			0, h, 0, 0,
-			0, 0, f0, 1,
-			0, 0, f1, 0
-		);
-	};
-	Mat44.Translation = function Translation (x,y,z) {
-		return new Mat44(
-			1,0,0,0,
-			0,1,0,0,
-			0,0,1,0,
-			x,y,z,1
-		);
-	};
-	Mat44.Rotation = function Rotation (axis, angle) {
-		var C = Math.cos(angle),
-			S = Math.sin(angle),
-			RC = 1-C;
-		var axis0 = axis.x,
-			axis1 = axis.y,
-			axis2 = axis.z;
-		return Mat44.FromRow(
-			C+TM.Square(axis0)*RC,		axis0*axis1*RC-axis2*S,		axis0*axis2*RC+axis1*S,		0,
-			axis0*axis1*RC+axis2*S,			C+TM.Square(axis1)*RC,	axis1*axis2*RC-axis0*S,		0,
-			axis0*axis2*RC-axis1*S,			axis1*axis2*RC+axis0*S,		C+TM.Square(axis2)*RC,	0,
-			0, 0, 0, 1
-		);
-	};
-	Mat44.RotationX = function RotationX (angle) {
-		return Mat44.Rotation(new Vec3(1,0,0), angle);
-	};
-	Mat44.RotationY = function RotationY (angle) {
-		return Mat44.Rotation(new Vec3(0,1,0), angle);
-	};
-	Mat44.RotationZ = function RotationZ (angle) {
-		return Mat44.Rotation(new Vec3(0,0,1), angle);
-	};
-
-	Mat44.Zero = function Zero () {
-		return new Mat44(0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0);
-	};
-	Mat44.Identity = function Identity () {
-		return new Mat44(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1);
-	};
-	Mat44.Iterate = function Iterate (f) {
-		for(var i=0 ; i<4 ; i++) {
-			for(var j=0 ; j<4 ; j++)
-				{ f(j,i); }
-		}
-	};
-	Mat44.prototype.get = function get (n,m) {
-		return this._value[n*4 + m];
-	};
-	Mat44.prototype.set = function set (n,m, val) {
-		return this._value[n*4 + m] = val;
-	};
-	Mat44.prototype.setMat = function setMat (m) {
-		var this$1 = this;
-
-		for(var i=0 ; i<16 ; i++)
-			{ this$1._value[i] = m._value[i]; }
-		return this;
-	};
-	prototypeAccessors._m00.get = function () { return this._value[0]; };
-	prototypeAccessors._m01.get = function () { return this._value[4]; };
-	prototypeAccessors._m02.get = function () { return this._value[8]; };
-	prototypeAccessors._m03.get = function () { return this._value[12]; };
-	prototypeAccessors._m10.get = function () { return this._value[0+1]; };
-	prototypeAccessors._m11.get = function () { return this._value[4+1]; };
-	prototypeAccessors._m12.get = function () { return this._value[8+1]; };
-	prototypeAccessors._m13.get = function () { return this._value[12+1]; };
-	prototypeAccessors._m20.get = function () { return this._value[0+2]; };
-	prototypeAccessors._m21.get = function () { return this._value[4+2]; };
-	prototypeAccessors._m22.get = function () { return this._value[8+2]; };
-	prototypeAccessors._m23.get = function () { return this._value[12+2]; };
-	prototypeAccessors._m30.get = function () { return this._value[0+3]; };
-	prototypeAccessors._m31.get = function () { return this._value[4+3]; };
-	prototypeAccessors._m32.get = function () { return this._value[8+3]; };
-	prototypeAccessors._m33.get = function () { return this._value[12+3]; };
-
-	prototypeAccessors.determinant.get = function () {
-		return this._m00 * this._m11 * this._m22 * this._m33 + this._m00 * this._m12 * this._m23 * this._m31 + this._m00 * this._m13 * this._m21 * this._m32
-			+ this._m01 * this._m10 * this._m23 * this._m32 + this._m01 * this._m12 * this._m20 * this._m33 + this._m01 * this._m13 * this._m22 * this._m30
-			+ this._m02 * this._m10 * this._m21 * this._m33 + this._m02 * this._m11 * this._m23 * this._m30 + this._m02 * this._m13 * this._m20 * this._m31
-			+ this._m03 * this._m10 * this._m22 * this._m31 + this._m03 * this._m11 * this._m20 * this._m32 + this._m03 * this._m12 * this._m21 * this._m30
-			- this._m00 * this._m11 * this._m23 * this._m32 - this._m00 * this._m12 * this._m21 * this._m33 - this._m00 * this._m13 * this._m22 * this._m31
-			- this._m01 * this._m10 * this._m22 * this._m33 - this._m01 * this._m12 * this._m23 * this._m30 - this._m01 * this._m13 * this._m20 * this._m32
-			- this._m02 * this._m10 * this._m23 * this._m31 - this._m02 * this._m11 * this._m20 * this._m33 - this._m02 * this._m13 * this._m21 * this._m30
-			- this._m03 * this._m10 * this._m21 * this._m32 - this._m03 * this._m11 * this._m22 * this._m30 - this._m03 * this._m12 * this._m20 * this._m31;
-	};
-	prototypeAccessors.invert.get = function () {
-		var det = this.determinant;
-		if(Math.abs(det) > 1e-5) {
-			var b = [
-				this._m11 * this._m22 * this._m33 + this._m12 * this._m23 * this._m31 + this._m13 * this._m21 * this._m32 - this._m11 * this._m23 * this._m32 - this._m12 * this._m21 * this._m33 - this._m13 * this._m22 * this._m31,
-				this._m01 * this._m23 * this._m32 + this._m02 * this._m21 * this._m33 + this._m03 * this._m22 * this._m31 - this._m01 * this._m22 * this._m33 - this._m02 * this._m23 * this._m31 - this._m03 * this._m21 * this._m32,
-				this._m01 * this._m12 * this._m33 + this._m02 * this._m13 * this._m31 + this._m03 * this._m11 * this._m32 - this._m01 * this._m13 * this._m32 - this._m02 * this._m11 * this._m33 - this._m03 * this._m12 * this._m31,
-				this._m01 * this._m13 * this._m22 + this._m02 * this._m11 * this._m23 + this._m03 * this._m12 * this._m21 - this._m01 * this._m12 * this._m23 - this._m02 * this._m13 * this._m21 - this._m03 * this._m11 * this._m22,
-
-				this._m10 * this._m23 * this._m32 + this._m12 * this._m20 * this._m33 + this._m13 * this._m22 * this._m30 - this._m10 * this._m22 * this._m33 - this._m12 * this._m23 * this._m30 - this._m13 * this._m20 * this._m32,
-				this._m00 * this._m22 * this._m33 + this._m02 * this._m23 * this._m30 + this._m03 * this._m20 * this._m32 - this._m00 * this._m23 * this._m32 - this._m02 * this._m20 * this._m33 - this._m03 * this._m22 * this._m30,
-				this._m00 * this._m13 * this._m32 + this._m02 * this._m10 * this._m33 + this._m03 * this._m12 * this._m30 - this._m00 * this._m12 * this._m33 - this._m02 * this._m13 * this._m30 - this._m03 * this._m10 * this._m32,
-				this._m00 * this._m12 * this._m23 + this._m02 * this._m13 * this._m20 + this._m03 * this._m10 * this._m22 - this._m00 * this._m13 * this._m22 - this._m02 * this._m10 * this._m23 - this._m03 * this._m12 * this._m20,
-
-				this._m10 * this._m21 * this._m33 + this._m11 * this._m23 * this._m30 + this._m13 * this._m20 * this._m31 - this._m10 * this._m23 * this._m31 - this._m11 * this._m20 * this._m33 - this._m13 * this._m21 * this._m30,
-				this._m00 * this._m23 * this._m31 + this._m01 * this._m20 * this._m33 + this._m03 * this._m21 * this._m30 - this._m00 * this._m21 * this._m33 - this._m01 * this._m23 * this._m30 - this._m03 * this._m20 * this._m31,
-				this._m00 * this._m11 * this._m33 + this._m01 * this._m13 * this._m30 + this._m03 * this._m10 * this._m31 - this._m00 * this._m13 * this._m31 - this._m01 * this._m10 * this._m33 - this._m03 * this._m11 * this._m30,
-				this._m00 * this._m13 * this._m21 + this._m01 * this._m10 * this._m23 + this._m03 * this._m11 * this._m20 - this._m00 * this._m11 * this._m23 - this._m01 * this._m13 * this._m20 - this._m03 * this._m10 * this._m21,
-
-				this._m10 * this._m22 * this._m31 + this._m11 * this._m20 * this._m32 + this._m12 * this._m21 * this._m30 - this._m10 * this._m21 * this._m32 - this._m11 * this._m22 * this._m30 - this._m12 * this._m20 * this._m31,
-				this._m00 * this._m21 * this._m32 + this._m01 * this._m22 * this._m30 + this._m02 * this._m20 * this._m31 - this._m00 * this._m22 * this._m31 - this._m01 * this._m20 * this._m32 - this._m02 * this._m21 * this._m30,
-				this._m00 * this._m12 * this._m31 + this._m01 * this._m10 * this._m32 + this._m02 * this._m11 * this._m30 - this._m00 * this._m11 * this._m32 - this._m01 * this._m12 * this._m30 - this._m02 * this._m10 * this._m31,
-				this._m00 * this._m11 * this._m22 + this._m01 * this._m12 * this._m20 + this._m02 * this._m10 * this._m21 - this._m00 * this._m12 * this._m21 - this._m01 * this._m10 * this._m22 - this._m02 * this._m11 * this._m20
-			];
-			det = 1 / det;
-			for(var i=0 ; i<b.length ; i++)
-				{ b[i] *= det; }
-			return Mat44.FromRow.apply(Mat44, b);
-		}
-		return null;
-	};
-	Mat44.prototype.transposeSelf = function transposeSelf () {
-		var this$1 = this;
-
-		for(var i=0 ; i<4 ; i++) {
-			for(var j=i ; j<4 ; j++) {
-				var tmp = this$1.get(i,j);
-				this$1.set(i,j, this$1.get(j,i));
-				this$1.set(j,i, tmp);
-			}
-		}
-		return this;
-	};
-	Mat44.prototype.transform3 = function transform3 (v) {
-		var this$1 = this;
-
-		var ret = new Vec3(this.get(0,3), this.get(1,3), this.get(2,3));
-		for(var i=0 ; i<3 ; i++) {
-			for(var j=0 ; j<3 ; j++)
-				{ ret._value[i] += this$1.get(i,j) * v._value[j]; }
-		}
-		return ret;
-	};
-	prototypeAccessors.clone.get = function () {
-		return new (Function.prototype.bind.apply( Mat44, [ null ].concat( this._value) ));
-	};
-	Mat44.prototype.mul = function mul (m) {
-		var this$1 = this;
-
-		if(m instanceof Mat44) {
-			var ret = Mat44.Zero();
-			Mat44.Iterate(function (i,j) {
-				var sum = 0;
-				for(var k=0 ; k<4 ; k++)
-					{ sum += this$1.get(k,j) * m.get(i,k); }
-				ret.set(i,j, sum);
-			});
-			return ret;
-		} else if(m instanceof Vec4) {
-			return this._mulVector(m);
-		} else {
-			Assert$1(false);
-		}
-		return Mat$$1.prototype.mul.call(this, m);
-	};
-	Mat44.prototype.mulSelf = function mulSelf (m) {
-		return this.setMat(this.mul(m));
-	};
-	Mat44.prototype._mulVector = function _mulVector (v) {
-		var this$1 = this;
-
-		var ret = Vec4.One(0);
-		for(var i=0 ; i<4 ; i++) {
-			for(var k=0 ; k<4 ; k++) {
-				ret._value[i] += this$1.get(k,i) * v._value[k];
-			}
-		}
-		return ret;
-	};
-	Mat44.prototype.toString = function toString () {
-		var this$1 = this;
-
-		var str = "Mat44:\n";
-		for(var i=0 ; i<4 ; i++) {
-			for(var j=0 ; j<4 ; j++) {
-				str += this$1.get(i,j);
-				if(j != 3)
-					{ str += ", "; }
-			}
-			if(i != 3)
-				{ str += "\n"; }
-		}
-		return str;
-	};
-
-	Object.defineProperties( Mat44.prototype, prototypeAccessors );
-
-	return Mat44;
-}(Mat));
-
-//! クォータニオンクラス
-var Quat = (function (Vec4$$1) {
-	function Quat(x,y,z,w) {
-		Vec4$$1.call(this, x,y,z,w);
-	}
-
-	if ( Vec4$$1 ) Quat.__proto__ = Vec4$$1;
-	Quat.prototype = Object.create( Vec4$$1 && Vec4$$1.prototype );
-	Quat.prototype.constructor = Quat;
-
-	var prototypeAccessors = { conjugate: {},elem00: {},elem01: {},elem02: {},elem10: {},elem11: {},elem12: {},elem20: {},elem21: {},elem22: {},xaxis: {},xaxisinv: {},yaxis: {},yaxisinv: {},zaxis: {},zaxisinv: {},right: {},up: {},dir: {},matrix44: {},angle: {},axis: {},vector: {},invert: {},clone: {} };
-	Quat.Identity = function Identity () {
-		return new Quat(0,0,0,1);
-	};
-
-	Quat.RotationYPR = function RotationYPR (yaw, pitch, roll) {
-		var q = Quat.Identity();
-		// roll
-		q.rotateSelfZ(roll);
-		// pitch
-		q.rotateSelfX(-pitch);
-		// yaw
-		q.rotateSelfY(yaw);
-		return q;
-	};
-	prototypeAccessors.conjugate.get = function () {
-		return new Quat(
-			-this._value[0],
-			-this._value[1],
-			-this._value[2],
-			this._value[3]
-		);
-	};
-	prototypeAccessors.elem00.get = function () { return (1-2*this.y*this.y-2*this.z*this.z); };
-	prototypeAccessors.elem01.get = function () { return (2*this.x*this.y+2*this.w*this.z); };
-	prototypeAccessors.elem02.get = function () { return (2*this.x*this.z-2*this.w*this.y); };
-	prototypeAccessors.elem10.get = function () { return (2*this.x*this.y-2*this.w*this.z); };
-	prototypeAccessors.elem11.get = function () { return (1-2*this.x*this.x-2*this.z*this.z); };
-	prototypeAccessors.elem12.get = function () { return (2*this.y*this.z+2*this.w*this.x); };
-	prototypeAccessors.elem20.get = function () { return (2*this.x*this.z+2*this.w*this.y); };
-	prototypeAccessors.elem21.get = function () { return (2*this.y*this.z-2*this.w*this.x); };
-	prototypeAccessors.elem22.get = function () { return (1-2*this.x*this.x-2*this.y*this.y); };
-	//! 回転を行列表現した時のX軸
-	prototypeAccessors.xaxis.get = function () {
-		return new Vec3(this.elem00, this.elem10, this.elem20);
-	};
-	//! 正規直行座標に回転を掛けた後のX軸
-	prototypeAccessors.xaxisinv.get = function () {
-		return new Vec3(this.elem00, this.elem01, this.elem02);
-	};
-	//!< 回転を行列表現した時のY軸
-	prototypeAccessors.yaxis.get = function () {
-		return new Vec3(this.elem01, this.elem11, this.elem21);
-	};
-	//!< 正規直行座標に回転を掛けた後のY軸
-	prototypeAccessors.yaxisinv.get = function () {
-		return new Vec3(this.elem10, this.elem11, this.elem12);
-	};
-	//!< 回転を行列表現した時のZ軸
-	prototypeAccessors.zaxis.get = function () {
-		return new Vec3(this.elem02, this.elem12, this.elem22);
-	};
-	//!< 正規直行座標に回転を掛けた後のZ軸
-	prototypeAccessors.zaxisinv.get = function () {
-		return new Vec3(this.elem20, this.elem21, this.elem22);
-	};
-	//!< X軸に回転を適用したベクトル
-	prototypeAccessors.right.get = function () {
-		return new Vec3(this.elem00, this.elem01, this.elem02);
-	};
-	//!< Y軸に回転を適用したベクトル
-	prototypeAccessors.up.get = function () {
-		return new Vec3(this.elem10, this.elem11, this.elem12);
-	};
-	//!< Z軸に回転を適用したベクトル
-	prototypeAccessors.dir.get = function () {
-		return new Vec3(this.elem20, this.elem21, this.elem22);
-	};
-	//! 行列変換(4x4)
-	prototypeAccessors.matrix44.get = function () {
-		return new Mat44(
-			this.elem00, this.elem01, this.elem02, 0,
-			this.elem10, this.elem11, this.elem12, 0,
-			this.elem20, this.elem21, this.elem22, 0,
-			0,0,0,1
-		);
-	};
-	Quat.prototype.conjugateSelf = function conjugateSelf () {
-		return this.set(this.conjugate);
-	};
-	Quat.prototype.rotateX = function rotateX (a) {
-		return this.rotate(new Vec3(1,0,0), a);
-	};
-	Quat.prototype.rotateY = function rotateY (a) {
-		return this.rotate(new Vec3(0,1,0), a);
-	};
-	Quat.prototype.rotateZ = function rotateZ (a) {
-		return this.rotate(new Vec3(0,0,1), a);
-	};
-	Quat.prototype.rotateSelfX = function rotateSelfX (a) {
-		return this.set(this.rotateX(a));
-	};
-	Quat.prototype.rotateSelfY = function rotateSelfY (a) {
-		return this.set(this.rotateY(a));
-	};
-	Quat.prototype.rotateSelfZ = function rotateSelfZ (a) {
-		return this.set(this.rotateZ(a));
-	};
-	Quat.prototype.rotateSelf = function rotateSelf (axis, a) {
-		return this.set(this.rotate(axis, a));
-	};
-	Quat.RotateX = function RotateX (a) {
-		return Quat.Rotate(new Vec3(1,0,0), a);
-	};
-	Quat.RotateY = function RotateY (a) {
-		return Quat.Rotate(new Vec3(0,1,0), a);
-	};
-	Quat.RotateZ = function RotateZ (a) {
-		return Quat.Rotate(new Vec3(0,0,1), a);
-	};
-	Quat.Rotate = function Rotate (axis, a) {
-		var C = Math.cos(a/2),
-			S = Math.sin(a/2);
-		axis = axis.mul(S);
-		return new Quat(axis.x, axis.y, axis.z, C);
-	};
-	Quat.prototype.rotate = function rotate (axis, a) {
-		return Quat.Rotate(axis, a).mul(this);
-	};
-	prototypeAccessors.angle.get = function () {
-		return Math.acos(Saturation(this.w, -1, 1))*2;
-	};
-	prototypeAccessors.axis.get = function () {
-		var s_theta = Math.sqrt(1 - this.w*this.w);
-		if(s_theta < 0.0001)
-			{ throw new Error("no valid axis"); }
-		s_theta = 1 / s_theta;
-		return new Vec3(this.x*s_theta, this.y*s_theta, this.z*s_theta);
-	};
-	Quat.prototype.mul = function mul (q) {
-		if(q instanceof Quat) {
-			return new Quat(
-				this.w*q.x + this.x*q.w + this.y*q.z - this.z*q.y,
-				this.w*q.y - this.x*q.z + this.y*q.w + this.z*q.x,
-				this.w*q.z + this.x*q.y - this.y*q.x + this.z*q.w,
-				this.w*q.w - this.x*q.x - this.y*q.y - this.z*q.z
-			);
-		} else if(typeof q === "number") {
-			return Vec4$$1.prototype.mul.call(this, q);
-		} else if(q instanceof Vec3) {
-			var q0 = new Quat(q.x, q.y, q.z);
-			q0.w = 0;
-			// return this.invert.mul(q0).mul(this).vector;
-			return (this.mul(q0).mul(this.invert)).vector;
-		}
-		Assert$1(false);
-	};
-	prototypeAccessors.vector.get = function () {
-		return new Vec3(this.x, this.y, this.z);
-	};
-	prototypeAccessors.invert.get = function () {
-		return this.conjugate.divSelf(this.len_sq);
-	};
-	Quat.prototype.invertSelf = function invertSelf () {
-		return this.set(this.invert);
-	};
-	//! 球面線形補間
-	Quat.prototype.slerp = function slerp (q, t) {
-		var ac = Saturation(this.dot(q), 0, 1);
-		var theta = Math.acos(ac),
-			S = Math.sin(theta);
-		if(Math.abs(S) < 0.001)
-			{ return this.clone; }
-		var rq = this.mul(Math.sin(theta * (1-t)) / S);
-		rq.addSelf(q.mul(Math.sin(theta * t) / S));
-		return rq;
-	};
-	prototypeAccessors.clone.get = function () {
-		return new Quat(this.x, this.y, this.z, this.w);
-	};
-
-	Object.defineProperties( Quat.prototype, prototypeAccessors );
-
-	return Quat;
-}(Vec4));
-
-//! 3D姿勢
+// 3D姿勢
 var Pose3D = function Pose3D(pos, rot, scale) {
-	this.pos = pos || Vec3.One(0);
-	this.rot = rot || Quat.Identity();
-	this.scale = scale || Vec3.One(1);
-};
+    if ( pos === void 0 ) pos = new Vec3(0);
+    if ( rot === void 0 ) rot = Quat.Identity();
+    if ( scale === void 0 ) scale = new Vec3(1);
 
-var prototypeAccessors$4 = { clone: {} };
+    this.pos = pos;
+    this.rot = rot;
+    this.scale = scale;
+};
 Pose3D.prototype.asMatrix = function asMatrix () {
-	// Scaling, Rotation, Position の順
-	return Mat44.Translation(this.pos.x, this.pos.y, this.pos.z).mul(
-		this.rot.matrix44.mul(
-			Mat44.Scaling(this.scale.x, this.scale.y, this.scale.z)
-		)
-	);
+    // Scaling, Rotation, Position の順
+    return Mat44.Translation(this.pos.x, this.pos.y, this.pos.z).mul(this.rot.matrix44().mul(Mat44.Scaling(this.scale.x, this.scale.y, this.scale.z)));
 };
-prototypeAccessors$4.clone.get = function () {
-	return new Pose3D(this.pos, this.rot, this.scale);
+Pose3D.prototype.clone = function clone () {
+    return new Pose3D(this.pos, this.rot, this.scale);
 };
-
-Object.defineProperties( Pose3D.prototype, prototypeAccessors$4 );
 
 var Camera3D = (function (Pose3D$$1) {
-	function Camera3D() {
-		var args = [], len = arguments.length;
-		while ( len-- ) args[ len ] = arguments[ len ];
+    function Camera3D() {
+        Pose3D$$1.apply(this, arguments);
+        this.fov = TM$1.Deg2rad(90);
+        this.aspect = 1;
+        this.nearZ = 1e-2;
+        this.farZ = 10;
+    }
 
-		Pose3D$$1.apply(this, args);
-		this.fov = 90;
-		this.aspect = 1;
-		this.nearZ = 1e-2;
-		this.farZ = 10;
-	}
+    if ( Pose3D$$1 ) Camera3D.__proto__ = Pose3D$$1;
+    Camera3D.prototype = Object.create( Pose3D$$1 && Pose3D$$1.prototype );
+    Camera3D.prototype.constructor = Camera3D;
+    Camera3D.prototype.getView = function getView () {
+        return Mat44.LookDir(this.pos, this.rot.dir(), new Vec3(0, 1, 0));
+    };
+    Camera3D.prototype.getProjection = function getProjection () {
+        return Mat44.PerspectiveFov(this.fov, this.aspect, this.nearZ, this.farZ);
+    };
+    Camera3D.prototype.getViewProjection = function getViewProjection () {
+        return this.getProjection().mul(this.getView());
+    };
+    /*! \param[in] pt	スクリーン座標(Vec2) */
+    Camera3D.prototype.unproject = function unproject (pt) {
+        var vp = this.getViewProjection();
+        vp = vp.invert();
+        var v0 = new Vec4(pt.x, pt.y, 0, 1), v1 = new Vec4(pt.x, pt.y, 1, 1);
+        v0 = vp.mul(v0);
+        v1 = vp.mul(v1);
+        v0.divSelf(v0.w);
+        v1.divSelf(v1.w);
+        var ret4 = v1.subSelf(v0).normalizeSelf();
+        return new Vec2(ret4.x, ret4.y);
+    };
+    Camera3D.prototype.clone = function clone () {
+        return new Camera3D(this.pos, this.rot, this.scale);
+    };
 
-	if ( Pose3D$$1 ) Camera3D.__proto__ = Pose3D$$1;
-	Camera3D.prototype = Object.create( Pose3D$$1 && Pose3D$$1.prototype );
-	Camera3D.prototype.constructor = Camera3D;
-	Camera3D.prototype.getView = function getView () {
-		return Mat44.LookDir(this.pos, this.rot.dir, new Vec3(0,1,0));
-	};
-	Camera3D.prototype.getProjection = function getProjection () {
-		return Mat44.PerspectiveFov(
-			this.fov,
-			this.aspect,
-			this.nearZ,
-			this.farZ
-		);
-	};
-	Camera3D.prototype.getViewProjection = function getViewProjection () {
-		return this.getProjection().mul(this.getView());
-	};
-	/*! \param[in] pt	スクリーン座標(Vec2) */
-	Camera3D.prototype.unproject = function unproject (pt) {
-		var vp = this.getViewProjection();
-		vp = vp.invert();
-		var v0 = new Vec4(pt.x, pt.y, 0, 1),
-			v1 = new Vec4(pt.x, pt.y, 1, 1);
-		v0 = vp.mul(v0);
-		v1 = vp.mul(v1);
-		v0.divSelf(v0.w);
-		v1.divSelf(v1.w);
-		return v1.subSelf(v0).normalizeSelf();
-	};
-
-	return Camera3D;
+    return Camera3D;
 }(Pose3D));
 
 var SysUnif3D = function SysUnif3D() {
-	this.camera = new Camera3D();
-	this.worldMatrix = Mat44.Identity();
-};
-
-var prototypeAccessors$3 = { camera: {},worldMatrix: {} };
-prototypeAccessors$3.camera.set = function (c) {
-	this._camera = c;
-};
-prototypeAccessors$3.camera.get = function () {
-	return this._camera;
-};
-prototypeAccessors$3.worldMatrix.set = function (m) {
-	this._mWorld = m;
-};
-prototypeAccessors$3.worldMatrix.get = function () {
-	return this._mWorld;
+    this.camera = new Camera3D();
+    this.worldMatrix = Mat44.Identity();
 };
 SysUnif3D.prototype.apply = function apply (prog) {
-	if(prog.hasUniform("u_mWorld")) {
-		prog.setUniform("u_mWorld", this.worldMatrix);
-	}
-	if(prog.hasUniform("u_mTrans")) {
-		var m = this.camera.getViewProjection().mulSelf(this.worldMatrix);
-		prog.setUniform("u_mTrans", m);
-	}
-	if(prog.hasUniform("u_eyePos")) {
-		prog.setUniform("u_eyePos", this.camera.pos);
-	}
+    if (prog.hasUniform("u_mWorld")) {
+        prog.setUniform("u_mWorld", this.worldMatrix);
+    }
+    if (prog.hasUniform("u_mTrans")) {
+        var m = this.camera.getViewProjection().mulSelf(this.worldMatrix);
+        prog.setUniform("u_mTrans", m);
+    }
+    if (prog.hasUniform("u_eyePos")) {
+        prog.setUniform("u_eyePos", this.camera.pos);
+    }
 };
 
-Object.defineProperties( SysUnif3D.prototype, prototypeAccessors$3 );
-
-var Resource = function Resource () {};
-
-/* global gl */
-var GLTexture = (function (Resource$$1) {
-	function GLTexture() {
-		Resource$$1.call(this);
-		Assert$1(this.typeId);
-		this._clean();
-		this._id = gl.createTexture();
-	}
-
-	if ( Resource$$1 ) GLTexture.__proto__ = Resource$$1;
-	GLTexture.prototype = Object.create( Resource$$1 && Resource$$1.prototype );
-	GLTexture.prototype.constructor = GLTexture;
-
-	var prototypeAccessors = { id: {},width: {},height: {} };
-	GLTexture.prototype._clean = function _clean () {
-		this._id = null;
-		this._bind = 0;
-		this._width = null;
-		this._height = null;
-	};
-	prototypeAccessors.id.get = function () { return this._id; };
-	prototypeAccessors.width.get = function () { return this._width; };
-	prototypeAccessors.height.get = function () { return this._height; };
-
-	GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
-		// [iMip][bL]
-		var flags = [
-			gl.NEAREST,
-			gl.LINEAR,
-			gl.NEAREST_MIPMAP_NEAREST,
-			gl.NEAREST_MIPMAP_LINEAR,
-			gl.LINEAR_MIPMAP_NEAREST,
-			gl.LINEAR_MIPMAP_LINEAR
-		];
-		this.bind();
-		gl.texParameteri(this.typeId, gl.TEXTURE_MIN_FILTER, flags[(iMip<<1) | Number(bLMin)]);
-		gl.texParameteri(this.typeId, gl.TEXTURE_MAG_FILTER, flags[Number(bLMag)]);
-		this.unbind();
-	};
-	GLTexture.prototype.setWrap = function setWrap (s, t) {
-		if(!t)
-			{ t = s; }
-		this.bind();
-		gl.texParameteri(this.typeId, gl.TEXTURE_WRAP_S, s);
-		gl.texParameteri(this.typeId, gl.TEXTURE_WRAP_T, t);
-		this.unbind();
-	};
-	GLTexture.prototype.bind = function bind () {
-		Assert$1(this.id, "already discarded");
-		Assert$1(this._bind === 0, "already binded");
-		gl.bindTexture(this.typeId, this.id);
-		++this._bind;
-	};
-	GLTexture.prototype.bind_loose = function bind_loose () {
-		Assert$1(this.id, "already discarded");
-		gl.bindTexture(this.typeId, this.id);
-		++this._bind;
-	};
-	GLTexture.prototype.unbind = function unbind () {
-		Assert$1(this._bind > 0, "not binded yet");
-		gl.bindTexture(this.typeId, null);
-		--this._bind;
-	};
-	GLTexture.prototype.setData = function setData (level, fmt, width, height, srcFmt, srcFmtType, pixels) {
-		this.bind();
-		gl.texImage2D(this.typeId, level, fmt, width, height, 0, srcFmt, srcFmtType, pixels);
-		this.unbind();
-		this._width = width;
-		this._height = height;
-	};
-	GLTexture.prototype.setSubData = function setSubData (level, rect, srcFmt, srcFmtType, pixels) {
-		this.bind();
-		gl.texSubImage2D(this.typeId, level, rect.left, rect.top, rect.width, rect.height, srcFmt, srcFmtType, pixels);
-		this.unbind();
-	};
-	GLTexture.prototype.setImage = function setImage (level, fmt, srcFmt, srcFmtType, obj) {
-		this.bind();
-		gl.texImage2D(this.typeId, level, fmt, srcFmt, srcFmtType, obj);
-		this.unbind();
-		this._width = obj.width;
-		this._height = obj.height;
-	};
-	GLTexture.prototype.setSubImage = function setSubImage (level, x, y, srcFmt, srcFmtType, obj) {
-		this.bind();
-		gl.texSubImage2D(this.typeId, level, x, y, srcFmt, srcFmtType, obj);
-		this.unbind();
-	};
-	GLTexture.prototype.genMipmap = function genMipmap () {
-		this.bind();
-		gl.generateMipmap(this.typeId);
-		this.unbind();
-	};
-	GLTexture.prototype.discard = function discard () {
-		Assert$1(!this._bind, "still binding somewhere");
-		Assert$1(this.id, "already discarded");
-		gl.deleteTexture(this.id);
-		this._clean();
-	};
-
-	Object.defineProperties( GLTexture.prototype, prototypeAccessors );
-
-	return GLTexture;
-}(Resource));
-
-/* global gl */
-var glc = {};
-function InitGLConst() {
-	glc.E_Drawtype = {
-		Static: gl.STATIC_DRAW,
-		Stream: gl.STREAM_DRAW,
-		Dynamic: gl.DYNAMIC_DRAW,
-	};
-	glc.E_Attachment = {
-		Color0: gl.COLOR_ATTACHMENT0,
-		Color1: gl.COLOR_ATTACHMENT1,
-		Color2: gl.COLOR_ATTACHMENT2,
-		Color3: gl.COLOR_ATTACHMENT3,
-		Depth: gl.DEPTH_ATTACHMENT,
-		Stencil: gl.STENCIL_ATTACHMENT,
-		DepthStencil: gl.DEPTH_STENCIL_ATTACHMENT,
-	};
-	glc.E_RBFormat = {
-		Depth16: gl.DEPTH_COMPONENT16,
-		Stencil8: gl.STENCIL_INDEX8,
-		RGBA4: gl.RGBA4,
-		RGB5_A1: gl.RGB5_A1,
-		RGB565: gl.RGB565,
-	};
-	glc.E_InterFormat = {
-		Alpha: gl.ALPHA,
-		RGB: gl.RGB,
-		RGBA: gl.RGBA,
-		Luminance: gl.LUMINANCE,
-		LuminanceAlpha: gl.LUMINANCE_ALPHA,
-	};
-	glc.E_TexDataFormat = {
-		UB: gl.UNSIGNED_BYTE,
-		US565: gl.UNSIGNED_SHORT_5_6_5,
-		US4444: gl.UNSIGNED_SHORT_4_4_4_4,
-		US5551: gl.UNSIGNED_SHORT_5_5_5_1,
-	};
-	glc.GLSLTypeInfo = ( obj = {}, obj[gl.INT] = {
-			name: "Int",
-			size: 1,
-			uniformF: gl.uniform1i
-		}, obj[gl.INT_VEC2] = {
-			name: "IntVec2",
-			size: 2,
-			uniformF: gl.uniform2iv
-		}, obj[gl.INT_VEC3] = {
-			name: "IntVec3",
-			size: 3,
-			uniformF: gl.uniform3iv
-		}, obj[gl.INT_VEC4] = {
-			name: "IntVec4",
-			size: 4,
-			uniformF: gl.uniform4iv
-		}, obj[gl.FLOAT] = {
-			name: "Float",
-			size: 1,
-			uniformF: gl.uniform1f,
-			vertexF: gl.vertexAttrib1f
-		}, obj[gl.FLOAT_VEC2] = {
-			name: "FloatVec2",
-			size: 2,
-			uniformF: gl.uniform2fv,
-			vertexF: gl.vertexAttrib2fv
-		}, obj[gl.FLOAT_VEC3] = {
-			name: "FloatVec3",
-			size: 3,
-			uniformF: gl.uniform3fv,
-			vertexF: gl.vertexAttrib3fv
-		}, obj[gl.FLOAT_VEC4] = {
-			name: "FloatVec4",
-			size: 4,
-			uniformF: gl.uniform4fv,
-			vertexF: gl.vertexAttrib4fv
-		}, obj[gl.FLOAT_MAT2] = {
-			name: "FloatMat2",
-			size: 2,
-			uniformF: gl.uniformMatrix2fv,
-		}, obj[gl.FLOAT_MAT3] = {
-			name: "FloatMat3",
-			size: 3,
-			uniformF: gl.uniformMatrix3fv,
-		}, obj[gl.FLOAT_MAT4] = {
-			name: "FloatMat4",
-			size: 4,
-			uniformF: gl.uniformMatrix4fv,
-		}, obj[gl.SAMPLER_2D] = {
-			name: "Sampler2D",
-			size: 1,
-			uniformF: gl.uniform1i,
-		}, obj );
-	var obj;
-	glc.GLTypeInfo = ( obj$1 = {}, obj$1[gl.BYTE] = {
-			bytesize: 1,
-		}, obj$1[gl.SHORT] = {
-			bytesize: 2,
-		}, obj$1[gl.UNSIGNED_BYTE] = {
-			bytesize: 1,
-		}, obj$1[gl.UNSIGNED_SHORT] = {
-			bytesize: 2,
-		}, obj$1[gl.FLOAT] = {
-			bytesize: 4,
-		}, obj$1 );
-	var obj$1;
-	// gl.enable/disable
-	glc.GLBoolSetting = {
-		blend: gl.BLEND,
-		cullface: gl.CULL_FACE,
-		depthtest: gl.DEPTH_TEST,
-		dither: gl.DITHER,
-		polygonoffsetfill: gl.POLYGON_OFFSET_FILL,
-		samplealphatocoverage: gl.SAMPLE_ALPHA_TO_COVERAGE,
-		samplecoverage: gl.SAMPLE_COVERAGE,
-		scissortest: gl.SCISSOR_TEST,
-		stenciltest: gl.STENCIL_TEST,
-	};
-	glc.E_BlendEquation = {
-		add: gl.FUNC_ADD,
-		sub: gl.FUNC_SUBTRACT,
-		reversesub: gl.FUNC_REVERSE_SUBTRACT,
-	};
-	glc.E_BlendFunc = {
-		zero: gl.ZERO,
-		one: gl.ONE,
-		srccolor: gl.SRC_COLOR,
-		dstcolor: gl.DST_COLOR,
-		oneminussrccolor: gl.ONE_MINUS_SRC_COLOR,
-		oneminusdstcolor: gl.ONE_MINUS_DST_COLOR,
-		srcalpha: gl.SRC_ALPHA,
-		dstalpha: gl.DST_ALPHA,
-		oneminussrcalpha: gl.ONE_MINUS_SRC_ALPHA,
-		oneminusdstalpha: gl.ONE_MINUS_DST_ALPHA,
-		constantcolor: gl.CONSTANT_COLOR,
-		oneminusconstantcolor: gl.ONE_MINUS_CONSTANT_COLOR,
-		oneminusconstantalpha: gl.ONE_MINUS_CONSTANT_ALPHA,
-		srcalphasaturate: gl.SRC_ALPHA_SATURATE,
-	};
-	glc.E_DepthFunc = {
-		never: gl.NEVER,
-		always: gl.ALWAYS,
-		less: gl.LESS,
-		lessequal: gl.LEQUAL,
-		equal: gl.EQUAL,
-		notequal: gl.NOTEQUAL,
-		greater: gl.GREATER,
-		greaterequal: gl.GEQUAL,
-	};
-	glc.E_StencilFunc = glc.E_DepthFunc;
-	glc.E_StencilOp = {
-		keep: gl.KEEP,
-		zero: gl.ZERO,
-		replace: gl.REPLACE,
-		increment: gl.INCR,
-		decrement: gl.DECR,
-		invert: gl.INVERT,
-		incrementwrap: gl.INCR_WRAP,
-		decrementwrap: gl.DECR_WRAP,
-	};
-	glc.E_Face = {
-		front: gl.FRONT,
-		back: gl.BACK,
-		frontandback: gl.FRONT_AND_BACK,
-	};
-	glc.E_CW = {
-		cw: gl.CW,
-		ccw: gl.CCW,
-	};
-	glc.GLValueSetting = {
-		blendcolor: gl.blendColor,
-		blendequation: function(mode0, mode1) {
-			if(!mode1)
-				{ mode1 = mode0; }
-			gl.blendEquationSeparate(glc.E_BlendFunc[mode0], glc.E_BlendFunc[mode1]);
-		},
-		blendfunc: function(sf0, df0, sf1, df1) {
-			if(!sf1) {
-				sf1 = sf0;
-				df1 = df0;
-			}
-			gl.blendFuncSeparate(
-				glc.E_BlendFunc[sf0],
-				glc.E_BlendFunc[df0],
-				glc.E_BlendFunc[sf1],
-				glc.E_BlendFunc[df1]
-			);
-		},
-		depthfunc: function(func) {
-			gl.depthFunc(glc.E_DepthFunc[func]);
-		},
-		samplecoverage: gl.sampleCoverage,
-		_stencilfunc: function(dir, func, ref, mask) {
-			gl.stencilFuncSeparate(dir, glc.E_StencilFunc[func], ref, mask);
-		},
-		stencilfuncfront: function(func, ref, mask) {
-			glc._stencilfunc(gl.FRONT, func, ref, mask);
-		},
-		stencilfuncback: function(func, ref, mask) {
-			glc._stencilfunc(gl.BACK, func, ref, mask);
-		},
-		stencilfunc: function(func, ref, mask) {
-			glc._stencilfunc(gl.FRONT_AND_BACK, func, ref, mask);
-		},
-		_stencilop: function(dir, func, ref, mask) {
-			gl.stencilOpSeparate(dir, glc.E_StencilOp[func], ref, mask);
-		},
-		stencilop: function(func, ref, mask) {
-			glc._stencilop(gl.FRONT_AND_BACK, func, ref, mask);
-		},
-		stencilopfront: function(func, ref, mask) {
-			glc._stencilop(gl.FRONT, func, ref, mask);
-		},
-		stencilopback: function(func, ref, mask) {
-			glc._stencilop(gl.BACK, func, ref, mask);
-		},
-		colormask: gl.colorMask,
-		depthmask: gl.depthMask,
-		stencilmask: gl.stencilMask,
-		stencilmaskfront: function(mask) {
-			gl.stencilMaskSeparate(gl.FRONT, mask);
-		},
-		stencilmaskback: function(mask) {
-			gl.stencilMaskSeparate(gl.BACK, mask);
-		},
-		cullface: function(dir) {
-			gl.cullFace(glc.E_Face[dir]);
-		},
-		frontface: function(cw) {
-			gl.frontFace(glc.E_CW[cw]);
-		},
-		linewidth: gl.lineWidth,
-		polygonoffset: gl.polygonOffset,
-	};
-	glc.Cnv_Type2GLType = {
-		Int8Array: gl.BYTE,
-		Uint8Array: gl.UNSIGNED_BYTE,
-		Uint8ClampedArray: gl.BYTE,
-		Int16Array: gl.SHORT,
-		Uint16Array: gl.UNSIGNED_SHORT,
-		Int32Array: gl.INT,
-		Uint32Array: gl.UNSIGNED_INT,
-		Float32Array: gl.FLOAT
-	};
-	glc.E_UVWrap = {
-		Repeat: gl.REPEAT,
-		Mirror: gl.MIRRORED_REPEAT,
-		Clamp: gl.CLAMP_TO_EDGE
-	};
-}
-
-/* global resource */
-var ResourceGenSrc = {};
-var ResourceGen = (function(){
-	return {
-		// rp = ResourceParam
-		get: function(rp) {
-			var key = rp.key;
-			var ret = resource.getResource(key);
-			if(ret)
-				{ return ret; }
-			var buff = ResourceGenSrc[rp.name](rp);
-			resource.addResource(key, buff);
-			return buff;
-		}
-	};
-})();
-
-var ResourceParam = (function () {
-	function anonymous () {}
-
-	var prototypeAccessors = { name: {},key: {} };
-
-	prototypeAccessors.name.get = function () { return null; };
-	prototypeAccessors.key.get = function () { return null; };
-
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
-
-	return anonymous;
-}());
-
-function MakeCanvas(id) {
-	var canvas = document.createElement("canvas");
-	canvas.id = id;
-	canvas.textContent = "Canvas not supported.";
-	return canvas;
-}
-function MakeCanvasToBody(id) {
-	var c = MakeCanvas(id);
-	document.body.appendChild(c);
-	return c;
-}
-ResourceGenSrc.Canvas = function(rp) {
-	return MakeCanvasToBody(rp.id);
+var GLResourceFlag = function GLResourceFlag() {
+    this._bDiscard = false;
+    this._bLost = true;
+};
+// -------------- from Discardable --------------
+GLResourceFlag.prototype.discard = function discard () {
+    Assert(!this.isDiscarded());
+    this._bDiscard = true;
+};
+GLResourceFlag.prototype.isDiscarded = function isDiscarded () {
+    return this._bDiscard;
+};
+// -------------- from GLContext --------------
+GLResourceFlag.prototype.onContextLost = function onContextLost (cb) {
+    Assert(!this.isDiscarded());
+    if (this._bLost)
+        { return; }
+    this._bLost = true;
+    cb();
+};
+GLResourceFlag.prototype.onContextRestored = function onContextRestored (cb) {
+    Assert(!this.isDiscarded());
+    if (!this._bLost)
+        { return; }
+    this._bLost = false;
+    cb();
+};
+GLResourceFlag.prototype.contextLost = function contextLost () {
+    Assert(!this.isDiscarded());
+    return this._bLost;
 };
 
-var RP_Canvas = (function (ResourceParam$$1) {
-	function anonymous(id) {
-		ResourceParam$$1.call(this);
-		this._id = id;
-	}
+var EnumBase;
+(function (EnumBase) {
+    EnumBase[EnumBase["Num"] = 34359738368] = "Num";
+})(EnumBase || (EnumBase = {}));
+var TextureType;
+(function (TextureType) {
+    TextureType[TextureType["Texture2D"] = 34359738368] = "Texture2D";
+})(TextureType || (TextureType = {}));
+var TextureQuery;
+(function (TextureQuery) {
+    TextureQuery[TextureQuery["Texture2D"] = 34359738368] = "Texture2D";
+})(TextureQuery || (TextureQuery = {}));
+var BufferType;
+(function (BufferType) {
+    BufferType[BufferType["Vertex"] = 34359738368] = "Vertex";
+    BufferType[BufferType["Index"] = 34359738369] = "Index";
+})(BufferType || (BufferType = {}));
+var BufferQuery;
+(function (BufferQuery) {
+    BufferQuery[BufferQuery["Vertex"] = 34359738368] = "Vertex";
+    BufferQuery[BufferQuery["Index"] = 34359738369] = "Index";
+})(BufferQuery || (BufferQuery = {}));
+var ShaderType;
+(function (ShaderType) {
+    ShaderType[ShaderType["Vertex"] = 34359738368] = "Vertex";
+    ShaderType[ShaderType["Fragment"] = 34359738369] = "Fragment";
+})(ShaderType || (ShaderType = {}));
+var DrawType;
+(function (DrawType) {
+    DrawType[DrawType["Static"] = 34359738368] = "Static";
+    DrawType[DrawType["Stream"] = 34359738369] = "Stream";
+    DrawType[DrawType["Dynamic"] = 34359738370] = "Dynamic";
+})(DrawType || (DrawType = {}));
+var Attachment;
+(function (Attachment) {
+    Attachment[Attachment["Color0"] = 34359738368] = "Color0";
+    Attachment[Attachment["Color1"] = 34359738369] = "Color1";
+    Attachment[Attachment["Color2"] = 34359738370] = "Color2";
+    Attachment[Attachment["Color3"] = 34359738371] = "Color3";
+    Attachment[Attachment["Depth"] = 34359738372] = "Depth";
+    Attachment[Attachment["Stencil"] = 34359738373] = "Stencil";
+    Attachment[Attachment["DepthStencil"] = 34359738374] = "DepthStencil";
+})(Attachment || (Attachment = {}));
+var RBFormat;
+(function (RBFormat) {
+    RBFormat[RBFormat["Depth16"] = 34359738368] = "Depth16";
+    RBFormat[RBFormat["Stencil8"] = 34359738369] = "Stencil8";
+    RBFormat[RBFormat["RGBA4"] = 34359738370] = "RGBA4";
+    RBFormat[RBFormat["RGB5_A1"] = 34359738371] = "RGB5_A1";
+    RBFormat[RBFormat["RGB565"] = 34359738372] = "RGB565";
+})(RBFormat || (RBFormat = {}));
+var InterFormat;
+(function (InterFormat) {
+    InterFormat[InterFormat["Alpha"] = 34359738368] = "Alpha";
+    InterFormat[InterFormat["RGB"] = 34359738369] = "RGB";
+    InterFormat[InterFormat["RGBA"] = 34359738370] = "RGBA";
+    InterFormat[InterFormat["Luminance"] = 34359738371] = "Luminance";
+    InterFormat[InterFormat["LuminanceAlpha"] = 34359738372] = "LuminanceAlpha";
+})(InterFormat || (InterFormat = {}));
+var TexDataFormat;
+(function (TexDataFormat) {
+    TexDataFormat[TexDataFormat["UB"] = 34359738368] = "UB";
+    TexDataFormat[TexDataFormat["US565"] = 34359738369] = "US565";
+    TexDataFormat[TexDataFormat["US4444"] = 34359738370] = "US4444";
+    TexDataFormat[TexDataFormat["US5551"] = 34359738371] = "US5551";
+})(TexDataFormat || (TexDataFormat = {}));
+var GLSLTypeInfoItem = function GLSLTypeInfoItem(id, name, size, uniformF, vertexF) {
+    this.id = id;
+    this.name = name;
+    this.size = size;
+    this.uniformF = uniformF;
+    this.vertexF = vertexF;
+};
+var GLTypeInfoItem = function GLTypeInfoItem(id, bytesize) {
+    this.id = id;
+    this.bytesize = bytesize;
+};
+// gl.enable/disable
+var BoolSetting;
+(function (BoolSetting) {
+    BoolSetting[BoolSetting["Blend"] = 34359738368] = "Blend";
+    BoolSetting[BoolSetting["Cullface"] = 34359738369] = "Cullface";
+    BoolSetting[BoolSetting["Depthtest"] = 34359738370] = "Depthtest";
+    BoolSetting[BoolSetting["Dither"] = 34359738371] = "Dither";
+    BoolSetting[BoolSetting["Polygonoffsetfill"] = 34359738372] = "Polygonoffsetfill";
+    BoolSetting[BoolSetting["Samplealphatocoverage"] = 34359738373] = "Samplealphatocoverage";
+    BoolSetting[BoolSetting["Samplecoverage"] = 34359738374] = "Samplecoverage";
+    BoolSetting[BoolSetting["Scissortest"] = 34359738375] = "Scissortest";
+    BoolSetting[BoolSetting["Stenciltest"] = 34359738376] = "Stenciltest";
+})(BoolSetting || (BoolSetting = {}));
+var BoolString = [
+    "blend",
+    "cullface",
+    "depthtest",
+    "dither",
+    "polygonoffsetfill",
+    "samplealphatocoverage",
+    "samplecoverage",
+    "scissortest",
+    "stenciltest"
+];
+var BlendEquation;
+(function (BlendEquation) {
+    BlendEquation[BlendEquation["Add"] = 34359738368] = "Add";
+    BlendEquation[BlendEquation["Sub"] = 34359738369] = "Sub";
+    BlendEquation[BlendEquation["Reversesub"] = 34359738370] = "Reversesub";
+})(BlendEquation || (BlendEquation = {}));
+var BlendFunc;
+(function (BlendFunc) {
+    BlendFunc[BlendFunc["Zero"] = 34359738368] = "Zero";
+    BlendFunc[BlendFunc["One"] = 34359738369] = "One";
+    BlendFunc[BlendFunc["SrcColor"] = 34359738370] = "SrcColor";
+    BlendFunc[BlendFunc["DstColor"] = 34359738371] = "DstColor";
+    BlendFunc[BlendFunc["OneMinusSrcColor"] = 34359738372] = "OneMinusSrcColor";
+    BlendFunc[BlendFunc["OneMinusDstColor"] = 34359738373] = "OneMinusDstColor";
+    BlendFunc[BlendFunc["SrcAlpha"] = 34359738374] = "SrcAlpha";
+    BlendFunc[BlendFunc["DstAlpha"] = 34359738375] = "DstAlpha";
+    BlendFunc[BlendFunc["OneMinusSrcAlpha"] = 34359738376] = "OneMinusSrcAlpha";
+    BlendFunc[BlendFunc["OneMinusDstAlpha"] = 34359738377] = "OneMinusDstAlpha";
+    BlendFunc[BlendFunc["ConstantColor"] = 34359738378] = "ConstantColor";
+    BlendFunc[BlendFunc["OneMinusConstantColor"] = 34359738379] = "OneMinusConstantColor";
+    BlendFunc[BlendFunc["ONEMinusConstantAlpha"] = 34359738380] = "ONEMinusConstantAlpha";
+    BlendFunc[BlendFunc["SrcAlphaSaturate"] = 34359738381] = "SrcAlphaSaturate";
+})(BlendFunc || (BlendFunc = {}));
+var DepthStencilFunc;
+(function (DepthStencilFunc) {
+    DepthStencilFunc[DepthStencilFunc["Never"] = 34359738368] = "Never";
+    DepthStencilFunc[DepthStencilFunc["Always"] = 34359738369] = "Always";
+    DepthStencilFunc[DepthStencilFunc["Less"] = 34359738370] = "Less";
+    DepthStencilFunc[DepthStencilFunc["LessEqual"] = 34359738371] = "LessEqual";
+    DepthStencilFunc[DepthStencilFunc["Equal"] = 34359738372] = "Equal";
+    DepthStencilFunc[DepthStencilFunc["NotEqual"] = 34359738373] = "NotEqual";
+    DepthStencilFunc[DepthStencilFunc["Greater"] = 34359738374] = "Greater";
+    DepthStencilFunc[DepthStencilFunc["GreaterEqual"] = 34359738375] = "GreaterEqual";
+})(DepthStencilFunc || (DepthStencilFunc = {}));
+var StencilOp;
+(function (StencilOp) {
+    StencilOp[StencilOp["Keep"] = 34359738368] = "Keep";
+    StencilOp[StencilOp["Zero"] = 34359738369] = "Zero";
+    StencilOp[StencilOp["Replace"] = 34359738370] = "Replace";
+    StencilOp[StencilOp["Increment"] = 34359738371] = "Increment";
+    StencilOp[StencilOp["Decrement"] = 34359738372] = "Decrement";
+    StencilOp[StencilOp["Invert"] = 34359738373] = "Invert";
+    StencilOp[StencilOp["IncrementWrap"] = 34359738374] = "IncrementWrap";
+    StencilOp[StencilOp["DecrementWrap"] = 34359738375] = "DecrementWrap";
+})(StencilOp || (StencilOp = {}));
+var Face;
+(function (Face) {
+    Face[Face["Front"] = 34359738368] = "Front";
+    Face[Face["Back"] = 34359738369] = "Back";
+    Face[Face["FrontAndBack"] = 34359738370] = "FrontAndBack";
+})(Face || (Face = {}));
+var CW;
+(function (CW) {
+    CW[CW["Cw"] = 34359738368] = "Cw";
+    CW[CW["Ccw"] = 34359738369] = "Ccw";
+})(CW || (CW = {}));
+var DataFormat;
+(function (DataFormat) {
+    DataFormat[DataFormat["Byte"] = 34359738368] = "Byte";
+    DataFormat[DataFormat["UByte"] = 34359738369] = "UByte";
+    DataFormat[DataFormat["Short"] = 34359738370] = "Short";
+    DataFormat[DataFormat["UShort"] = 34359738371] = "UShort";
+    DataFormat[DataFormat["Int"] = 34359738372] = "Int";
+    DataFormat[DataFormat["UInt"] = 34359738373] = "UInt";
+    DataFormat[DataFormat["Float"] = 34359738374] = "Float";
+})(DataFormat || (DataFormat = {}));
+var UVWrap;
+(function (UVWrap) {
+    UVWrap[UVWrap["Repeat"] = 34359738368] = "Repeat";
+    UVWrap[UVWrap["Mirror"] = 34359738369] = "Mirror";
+    UVWrap[UVWrap["Clamp"] = 34359738370] = "Clamp";
+})(UVWrap || (UVWrap = {}));
+var Conv = function Conv() {
+    var this$1 = this;
+    var arg = [], len = arguments.length;
+    while ( len-- ) arg[ len ] = arguments[ len ];
 
-	if ( ResourceParam$$1 ) anonymous.__proto__ = ResourceParam$$1;
-	anonymous.prototype = Object.create( ResourceParam$$1 && ResourceParam$$1.prototype );
-	anonymous.prototype.constructor = anonymous;
+    this._i2gl = [];
+    this._gl2i = {};
+    this._str2i = {};
+    for (var i = 0; i < arg.length; i++) {
+        var ref = [arg[i][0], arg[i][1]];
+        var name = ref[0];
+        var num = ref[1];
+        var id = 34359738368 /* Num */ + i;
+        this$1._i2gl[id] = num;
+        this$1._gl2i[num] = id;
+        this$1._str2i[name] = id;
+        this$1._str2i[name.toLowerCase()] = id;
+    }
+};
+Conv.prototype.convert = function convert (id) {
+    if (id < 34359738368 /* Num */)
+        { return this._gl2i[id]; }
+    return this._i2gl[id];
+};
+Conv.prototype.toString = function toString (id) {
+    if (id < 34359738368 /* Num */)
+        { return this._gl2i[id].toString(); }
+    return id.toString();
+};
+Conv.prototype.fromString = function fromString (name) {
+    return this._str2i[name];
+};
+Conv.prototype.fromStringToGL = function fromStringToGL (name) {
+    return this.convert(this.fromString(name));
+};
+Conv.prototype.length = function length () {
+    return this._i2gl.length;
+};
+var GLConst = function GLConst(gl) {
+    var ItrBegin = 34359738368;
+    {
+        var i = ItrBegin;
+        GLConst.TextureC = new Conv([TextureType[i++], gl.TEXTURE_2D]);
+    }
+    {
+        var i$1 = ItrBegin;
+        GLConst.TextureQueryC = new Conv([TextureQuery[i$1++], gl.TEXTURE_BINDING_2D]);
+    }
+    {
+        var i$2 = ItrBegin;
+        GLConst.ShaderTypeC = new Conv([ShaderType[i$2++], gl.VERTEX_SHADER], [ShaderType[i$2++], gl.FRAGMENT_SHADER]);
+    }
+    {
+        var i$3 = ItrBegin;
+        GLConst.BufferTypeC = new Conv([BufferType[i$3++], gl.ARRAY_BUFFER], [BufferType[i$3++], gl.ELEMENT_ARRAY_BUFFER]);
+    }
+    {
+        var i$4 = ItrBegin;
+        GLConst.BufferQueryC = new Conv([BufferQuery[i$4++], gl.ARRAY_BUFFER_BINDING], [BufferQuery[i$4++], gl.ELEMENT_ARRAY_BUFFER_BINDING]);
+    }
+    {
+        var i$5 = ItrBegin;
+        GLConst.DrawTypeC = new Conv([DrawType[i$5++], gl.STATIC_DRAW], [DrawType[i$5++], gl.STREAM_DRAW], [DrawType[i$5++], gl.DYNAMIC_DRAW]);
+    }
+    {
+        var i$6 = ItrBegin;
+        GLConst.AttachmentC = new Conv([Attachment[i$6++], gl.COLOR_ATTACHMENT0], [Attachment[i$6++], gl.COLOR_ATTACHMENT0 + 1], [Attachment[i$6++], gl.COLOR_ATTACHMENT0 + 2], [Attachment[i$6++], gl.COLOR_ATTACHMENT0 + 3], [Attachment[i$6++], gl.DEPTH_ATTACHMENT], [Attachment[i$6++], gl.STENCIL_ATTACHMENT], [Attachment[i$6++], gl.DEPTH_STENCIL_ATTACHMENT]);
+    }
+    {
+        var i$7 = ItrBegin;
+        GLConst.RBFormatC = new Conv([RBFormat[i$7++], gl.DEPTH_COMPONENT16], [RBFormat[i$7++], gl.STENCIL_INDEX8], [RBFormat[i$7++], gl.RGBA4], [RBFormat[i$7++], gl.RGB5_A1], [RBFormat[i$7++], gl.RGB565]);
+    }
+    {
+        var i$8 = ItrBegin;
+        GLConst.InterFormatC = new Conv([InterFormat[i$8++], gl.ALPHA], [InterFormat[i$8++], gl.RGB], [InterFormat[i$8++], gl.RGBA], [InterFormat[i$8++], gl.LUMINANCE], [InterFormat[i$8++], gl.LUMINANCE_ALPHA]);
+    }
+    {
+        var i$9 = ItrBegin;
+        GLConst.TexDataFormatC = new Conv([TexDataFormat[i$9++], gl.UNSIGNED_BYTE], [TexDataFormat[i$9++], gl.UNSIGNED_SHORT_5_6_5], [TexDataFormat[i$9++], gl.UNSIGNED_SHORT_4_4_4_4], [TexDataFormat[i$9++], gl.UNSIGNED_SHORT_5_5_5_1]);
+    }
+    {
+        var i$10 = ItrBegin;
+        // gl.enable/disable
+        GLConst.BoolSettingC = new Conv([BoolSetting[i$10++], gl.BLEND], [BoolSetting[i$10++], gl.CULL_FACE], [BoolSetting[i$10++], gl.DEPTH_TEST], [BoolSetting[i$10++], gl.DITHER], [BoolSetting[i$10++], gl.POLYGON_OFFSET_FILL], [BoolSetting[i$10++], gl.SAMPLE_ALPHA_TO_COVERAGE], [BoolSetting[i$10++], gl.SAMPLE_COVERAGE], [BoolSetting[i$10++], gl.SCISSOR_TEST], [BoolSetting[i$10++], gl.STENCIL_TEST]);
+    }
+    {
+        var i$11 = ItrBegin;
+        GLConst.BlendEquationC = new Conv([BlendEquation[i$11++], gl.FUNC_ADD], [BlendEquation[i$11++], gl.FUNC_SUBTRACT], [BlendEquation[i$11++], gl.FUNC_REVERSE_SUBTRACT]);
+    }
+    {
+        var i$12 = ItrBegin;
+        GLConst.BlendFuncC = new Conv([BlendFunc[i$12++], gl.ZERO], [BlendFunc[i$12++], gl.ONE], [BlendFunc[i$12++], gl.SRC_COLOR], [BlendFunc[i$12++], gl.DST_COLOR], [BlendFunc[i$12++], gl.ONE_MINUS_SRC_COLOR], [BlendFunc[i$12++], gl.ONE_MINUS_DST_COLOR], [BlendFunc[i$12++], gl.SRC_ALPHA], [BlendFunc[i$12++], gl.DST_ALPHA], [BlendFunc[i$12++], gl.ONE_MINUS_SRC_ALPHA], [BlendFunc[i$12++], gl.ONE_MINUS_DST_ALPHA], [BlendFunc[i$12++], gl.CONSTANT_COLOR], [BlendFunc[i$12++], gl.ONE_MINUS_CONSTANT_COLOR], [BlendFunc[i$12++], gl.ONE_MINUS_CONSTANT_ALPHA], [BlendFunc[i$12++], gl.SRC_ALPHA_SATURATE]);
+    }
+    {
+        var i$13 = ItrBegin;
+        GLConst.DataFormatC = new Conv([DataFormat[i$13++], gl.BYTE], [DataFormat[i$13++], gl.UNSIGNED_BYTE], [DataFormat[i$13++], gl.SHORT], [DataFormat[i$13++], gl.UNSIGNED_SHORT], [DataFormat[i$13++], gl.INT], [DataFormat[i$13++], gl.UNSIGNED_INT], [DataFormat[i$13++], gl.FLOAT]);
+    }
+    {
+        var i$14 = ItrBegin;
+        GLConst.DepthStencilFuncC = new Conv([DepthStencilFunc[i$14++], gl.NEVER], [DepthStencilFunc[i$14++], gl.ALWAYS], [DepthStencilFunc[i$14++], gl.LESS], [DepthStencilFunc[i$14++], gl.LEQUAL], [DepthStencilFunc[i$14++], gl.EQUAL], [DepthStencilFunc[i$14++], gl.NOTEQUAL], [DepthStencilFunc[i$14++], gl.GREATER], [DepthStencilFunc[i$14++], gl.GEQUAL]);
+    }
+    {
+        var i$15 = ItrBegin;
+        GLConst.StencilOpC = new Conv([StencilOp[i$15++], gl.KEEP], [StencilOp[i$15++], gl.ZERO], [StencilOp[i$15++], gl.REPLACE], [StencilOp[i$15++], gl.INCR], [StencilOp[i$15++], gl.DECR], [StencilOp[i$15++], gl.INVERT], [StencilOp[i$15++], gl.INCR_WRAP], [StencilOp[i$15++], gl.DECR_WRAP]);
+    }
+    {
+        var i$16 = ItrBegin;
+        GLConst.FaceC = new Conv([Face[i$16++], gl.FRONT], [Face[i$16++], gl.BACK], [Face[i$16++], gl.FRONT_AND_BACK]);
+    }
+    {
+        var i$17 = ItrBegin;
+        GLConst.CWC = new Conv([CW[i$17++], gl.CW], [CW[i$17++], gl.CCW]);
+    }
+    {
+        var i$18 = ItrBegin;
+        GLConst.UVWrapC = new Conv([UVWrap[i$18++], gl.REPEAT], [UVWrap[i$18++], gl.MIRRORED_REPEAT], [UVWrap[i$18++], gl.CLAMP_TO_EDGE]);
+    }
+    {
+        var t = GLConst.GLSLTypeInfo;
+        t[gl.INT] = new GLSLTypeInfoItem(gl.INT, "Int", 1, gl.uniform1i);
+        t[gl.INT_VEC2] = new GLSLTypeInfoItem(gl.INT_VEC2, "IntVec2", 2, gl.uniform2iv);
+        t[gl.INT_VEC3] = new GLSLTypeInfoItem(gl.INT_VEC3, "IntVec3", 3, gl.uniform3iv);
+        t[gl.INT_VEC4] = new GLSLTypeInfoItem(gl.INT_VEC4, "IntVec4", 4, gl.uniform4iv);
+        t[gl.FLOAT] = new GLSLTypeInfoItem(gl.FLOAT, "Float", 1, gl.uniform1f, gl.vertexAttrib1f);
+        t[gl.FLOAT_VEC2] = new GLSLTypeInfoItem(gl.FLOAT_VEC2, "FloatVec2", 2, gl.uniform2fv, gl.vertexAttrib2fv);
+        t[gl.FLOAT_VEC3] = new GLSLTypeInfoItem(gl.FLOAT_VEC3, "FloatVec3", 3, gl.uniform3fv, gl.vertexAttrib3fv);
+        t[gl.FLOAT_VEC4] = new GLSLTypeInfoItem(gl.FLOAT_VEC4, "FloatVec4", 4, gl.uniform4fv, gl.vertexAttrib4fv);
+        t[gl.FLOAT_MAT2] = new GLSLTypeInfoItem(gl.FLOAT_MAT2, "FloatMat2", 2, gl.uniformMatrix2fv);
+        t[gl.FLOAT_MAT3] = new GLSLTypeInfoItem(gl.FLOAT_MAT3, "FloatMat3", 3, gl.uniformMatrix3fv);
+        t[gl.FLOAT_MAT4] = new GLSLTypeInfoItem(gl.FLOAT_MAT4, "FloatMat4", 4, gl.uniformMatrix4fv);
+        t[gl.SAMPLER_2D] = new GLSLTypeInfoItem(gl.SAMPLER_2D, "Sampler2D", 1, gl.uniform1i);
+    }
+    {
+        var t$1 = GLConst.GLTypeInfo;
+        t$1[gl.BYTE] = new GLTypeInfoItem(gl.BYTE, 1);
+        t$1[gl.UNSIGNED_BYTE] = new GLTypeInfoItem(gl.UNSIGNED_BYTE, 1);
+        t$1[gl.SHORT] = new GLTypeInfoItem(gl.SHORT, 2);
+        t$1[gl.UNSIGNED_SHORT] = new GLTypeInfoItem(gl.UNSIGNED_SHORT, 2);
+        t$1[gl.INT] = new GLTypeInfoItem(gl.INT, 4);
+        t$1[gl.UNSIGNED_INT] = new GLTypeInfoItem(gl.UNSIGNED_INT, 4);
+        t$1[gl.FLOAT] = new GLTypeInfoItem(gl.FLOAT, 4);
+    }
+    {
+        var cnv = GLConst.DataFormatC;
+        var s = GLConst.GLTypeInfo;
+        var t$2 = GLConst.Type2GLType;
+        t$2.Int8Array = s[cnv.convert(DataFormat.Byte)];
+        t$2.Uint8Array = s[cnv.convert(DataFormat.UByte)];
+        t$2.Uint8ClampedArray = s[cnv.convert(DataFormat.UByte)];
+        t$2.Int16Array = s[cnv.convert(DataFormat.Short)];
+        t$2.Uint16Array = s[cnv.convert(DataFormat.UShort)];
+        t$2.Int32Array = s[cnv.convert(DataFormat.Int)];
+        t$2.Uint32Array = s[cnv.convert(DataFormat.UInt)];
+        t$2.Float32Array = s[cnv.convert(DataFormat.Float)];
+    }
+    {
+        var t$3 = GLConst.ValueSetting;
+        t$3.blendcolor = gl.blendColor;
+        var bfc = GLConst.BlendFuncC;
+        t$3.blendequation = function (mode0, mode1) {
+            if ( mode1 === void 0 ) mode1 = mode0;
 
-	var prototypeAccessors = { id: {},name: {},key: {} };
-	prototypeAccessors.id.get = function () { return this._id; };
-	prototypeAccessors.name.get = function () { return "Canvas"; };
-	prototypeAccessors.key.get = function () { return ("Canvas_" + (this._id)); };
+            gl.blendEquationSeparate(bfc.fromStringToGL(mode0), bfc.fromStringToGL(mode1));
+        };
+        t$3.blendfunc = function (sf0, df0, sf1, df1) {
+            if ( sf1 === void 0 ) sf1 = sf0;
+            if ( df1 === void 0 ) df1 = df0;
 
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
-
-	return anonymous;
-}(ResourceParam));
-
-ResourceGenSrc.WebGL = function(rp) {
-	var canvas = ResourceGen.get(new RP_Canvas(rp.canvasId));
-	var param = {
-		preserveDrawingBuffer: false
-	};
-	var webgl_text = [
-		"webgl",
-		"experimental-webgl",
-		"webkit-3d",
-		"moz-webgl",
-		"3d"
-	];
-	var gl;
-	for(var i=0 ; i<webgl_text.length ; i++) {
-		gl = canvas.getContext(webgl_text[i], param);
-		if(gl)
-			{ break; }
-	}
-	return gl;	
+            gl.blendFuncSeparate(bfc.fromStringToGL(sf0), bfc.fromStringToGL(df0), bfc.fromStringToGL(sf1), bfc.fromStringToGL(df1));
+        };
+        var dsfunc = GLConst.DepthStencilFuncC;
+        t$3.depthfunc = function (func) {
+            gl.depthFunc(dsfunc.fromStringToGL(func));
+        };
+        t$3.samplecoverage = gl.sampleCoverage;
+        t$3._stencilfunc = function (dir, func, ref, mask) {
+            gl.stencilFuncSeparate(dir, dsfunc.fromStringToGL(func), ref, mask);
+        };
+        t$3.stencilfuncfront = function (func, ref, mask) {
+            t$3._stencilfunc(gl.FRONT, func, ref, mask);
+        };
+        t$3.stencilfuncback = function (func, ref, mask) {
+            t$3._stencilfunc(gl.BACK, func, ref, mask);
+        };
+        t$3.stencilfunc = function (func, ref, mask) {
+            t$3._stencilfunc(gl.FRONT_AND_BACK, func, ref, mask);
+        };
+        var sop = GLConst.StencilOpC;
+        t$3._stencilop = function (dir, func, ref, mask) {
+            gl.stencilOpSeparate(dir, sop.fromStringToGL(func), ref, mask);
+        };
+        t$3.stencilop = function (func, ref, mask) {
+            t$3._stencilop(gl.FRONT_AND_BACK, func, ref, mask);
+        };
+        t$3.stencilopfront = function (func, ref, mask) {
+            t$3._stencilop(gl.FRONT, func, ref, mask);
+        };
+        t$3.stencilopback = function (func, ref, mask) {
+            t$3._stencilop(gl.BACK, func, ref, mask);
+        };
+        t$3.colormask = gl.colorMask;
+        t$3.depthmask = gl.depthMask;
+        t$3.stencilmask = gl.stencilMask;
+        t$3.stencilmaskfront = function (mask) {
+            gl.stencilMaskSeparate(gl.FRONT, mask);
+        };
+        t$3.stencilmaskback = function (mask) {
+            gl.stencilMaskSeparate(gl.BACK, mask);
+        };
+        var facec = GLConst.FaceC;
+        t$3.cullface = function (dir) {
+            gl.cullFace(facec.fromStringToGL(dir));
+        };
+        var cwc = GLConst.CWC;
+        t$3.frontface = function (cw) {
+            gl.frontFace(cwc.fromStringToGL(cw));
+        };
+        t$3.linewidth = gl.lineWidth;
+        t$3.polygonoffset = gl.polygonOffset;
+    }
 };
 
-var RP_WebGLCtx = (function (ResourceParam$$1) {
-	function anonymous(canvasId) {
-		ResourceParam$$1.call(this);
-		this._canvasId = canvasId;
-	}
+GLConst.GLSLTypeInfo = {};
+GLConst.GLTypeInfo = {};
+GLConst.Type2GLType = {};
+GLConst.ValueSetting = {};
 
-	if ( ResourceParam$$1 ) anonymous.__proto__ = ResourceParam$$1;
-	anonymous.prototype = Object.create( ResourceParam$$1 && ResourceParam$$1.prototype );
-	anonymous.prototype.constructor = anonymous;
-
-	var prototypeAccessors = { canvasId: {},name: {},key: {} };
-	prototypeAccessors.canvasId.get = function () { return this._canvasId; };
-	prototypeAccessors.name.get = function () { return "WebGL"; };
-	prototypeAccessors.key.get = function () { return ("WebGL_" + (this._canvasId)); };
-
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
-
-	return anonymous;
-}(ResourceParam));
-
-window._=RP_WebGLCtx;
-
-/* global gl */
-var Engine = function Engine() {
-	this._doubling = 1;
-	this._initGL();
-	this._sys3d = new SysUnif3D();
-	this._tech = {};
-
-	gl.depthFunc(gl.LEQUAL);
-	gl.frontFace(gl.CCW);
-	gl.cullFace(gl.FRONT);
-	gl.blendFunc(glc.E_BlendFunc.srcalpha, glc.E_BlendFunc.oneminussrcalpha);
+var Size = function Size(width, height) {
+    this.width = width;
+    this.height = height;
 };
 
-var prototypeAccessors$2 = { sys3d: {},width: {},height: {},technique: {},program: {} };
-Engine.prototype._onResized = function _onResized () {
-	var canvas = ResourceGen.get(new RP_Canvas("maincanvas"));
-	var w = window.innerWidth,
-		h = window.innerHeight;
-	var assign;
-		(assign = [w, h], this._width = assign[0], this._height = assign[1]);
-	var dbl = this._doubling;
-	var assign$1;
-		(assign$1 = [w/dbl, h/dbl], canvas.width = assign$1[0], canvas.height = assign$1[1]);
-	gl.viewport(0, 0, w/dbl, h/dbl);
-	canvas.style.cssText = "width:100%;height:100%";
+var Backup;
+(function (Backup) {
+    var Wrap = function Wrap(s, t) {
+        this.s = s;
+        this.t = t;
+    };
+    Wrap.prototype.apply = function apply (tex) {
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_S, GLConst.UVWrapC.convert(this.s));
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_T, GLConst.UVWrapC.convert(this.t));
+        return true;
+    };
+    Backup.Wrap = Wrap;
+    var Filter = function Filter(minLinear, magLinear, iMip) {
+        this.minLinear = minLinear;
+        this.magLinear = magLinear;
+        this.iMip = iMip;
+    };
+    Filter.prototype.apply = function apply (tex) {
+        // [iMip][bL]
+        var flags = [
+            gl.NEAREST,
+            gl.LINEAR,
+            gl.NEAREST_MIPMAP_NEAREST,
+            gl.NEAREST_MIPMAP_LINEAR,
+            gl.LINEAR_MIPMAP_NEAREST,
+            gl.LINEAR_MIPMAP_LINEAR
+        ];
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_MIN_FILTER, flags[(this.iMip << 1) | Number(this.minLinear)]);
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_MAG_FILTER, flags[Number(this.magLinear)]);
+    };
+    Backup.Filter = Filter;
+    var ImageData = function ImageData(fmt, srcFmt, srcFmtType, obj) {
+        this.fmt = fmt;
+        this.srcFmt = srcFmt;
+        this.srcFmtType = srcFmtType;
+        this.obj = obj;
+    };
+    ImageData.prototype.apply = function apply (tex) {
+        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this.fmt), GLConst.InterFormatC.convert(this.srcFmt), GLConst.TexDataFormatC.convert(this.srcFmtType), this.obj);
+        gl.generateMipmap(tex._typeId());
+    };
+    Backup.ImageData = ImageData;
+    var PixelData = function PixelData(size, fmt, pixels) {
+        this._dstFmt = fmt;
+        if (fmt === InterFormat.RGBA) {
+            this._dim = 4;
+        }
+        else {
+            this._dim = 1;
+        }
+        if (pixels)
+            { this._pixels = pixels; }
+        else
+            { this._pixels = new Uint8Array(size.width * size.height * this._dim); }
+    };
+    PixelData.prototype.apply = function apply (tex) {
+        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this._dstFmt), tex.size().width, tex.size().height, 0, GLConst.InterFormatC.convert(this._dstFmt), GLConst.TexDataFormatC.convert(TexDataFormat.UB), this._pixels);
+    };
+    PixelData.prototype.writeSubData = function writeSubData (dstWidth, px, py, srcWidth, pixels) {
+        BlockPlace(this._pixels, dstWidth, this._dim, px, py, pixels, srcWidth);
+    };
+    Backup.PixelData = PixelData;
+    var Index;
+    (function (Index) {
+        Index[Index["Base"] = 0] = "Base";
+        Index[Index["Filter"] = 1] = "Filter";
+        Index[Index["Wrap"] = 2] = "Wrap";
+    })(Index = Backup.Index || (Backup.Index = {}));
+    var Flag;
+    (function (Flag) {
+        Flag[Flag["Base"] = 1] = "Base";
+        Flag[Flag["Filter"] = 2] = "Filter";
+        Flag[Flag["Wrap"] = 4] = "Wrap";
+        Flag[Flag["_Num"] = 3] = "_Num";
+        Flag[Flag["All"] = 255] = "All";
+    })(Flag = Backup.Flag || (Backup.Flag = {}));
+})(Backup || (Backup = {}));
+var GLTexture = function GLTexture() {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._bind = 0;
+    this._size = new Size(0, 0);
+    this._param = [
+        null,
+        new Backup.Filter(false, false, 0),
+        new Backup.Wrap(UVWrap.Clamp, UVWrap.Clamp) ];
+    glres.add(this);
 };
-prototypeAccessors$2.sys3d.get = function () {
-	return this._sys3d;
+GLTexture.prototype._typeId = function _typeId () {
+    return GLConst.TextureC.convert(this.typeId());
 };
-prototypeAccessors$2.width.get = function () {
-	return this._width;
+GLTexture.prototype._typeQueryId = function _typeQueryId () {
+    return GLConst.TextureQueryC.convert(this.typeQueryId());
 };
-prototypeAccessors$2.height.get = function () {
-	return this._height;
+GLTexture.prototype._applyParams = function _applyParams (flag) {
+        var this$1 = this;
+
+    var at = 0x01;
+    for (var i = 0; i < Backup.Flag._Num; i++) {
+        if (flag & at) {
+            var p = this$1._param[i];
+            if (p)
+                { p.apply(this$1); }
+        }
+        at <<= 1;
+    }
 };
-Engine.prototype._initGL = function _initGL () {
-		var this$1 = this;
-
-	Assert$1(!window.gl, "already initialized");
-	window.gl = ResourceGen.get(new RP_WebGLCtx("maincanvas"));
-	if(!gl)
-		{ throw new Error("WebGL not supported."); }
-	// const canvas = ResourceGen.get(new RP_Canvas("maincanvas"));
-	// canvas.addEventListener("webglcontextlost", function(e){
-	// });
-	// canvas.addEventListener("webglcontextrestored", function(e){
-	// });
-
-	window.onresize = function () {
-		this$1._onResized();
-	};
-	this._onResized();
-	InitGLConst();
+GLTexture.prototype.id = function id () {
+    return this._id;
 };
-
-Engine.prototype.draw = function draw (cb) {
-		var this$1 = this;
-
-	var prog = this.technique.program;
-	this.sys3d.apply(prog);
-	var tc = 0;
-	var tex = [];
-	Object.keys(this._unif).forEach(function (k){
-		var v = this$1._unif[k];
-		if(v instanceof GLTexture) {
-			gl.activeTexture(gl.TEXTURE0 + tc);
-			v.bind_loose();
-			prog.setUniform(k, tc++);
-			tex.push(v);
-		} else {
-			prog.setUniform(k, v);
-		}
-	});
-	cb();
-	for(var i=0 ; i<tex.length ; i++)
-		{ tex[i].unbind(); }
+GLTexture.prototype.size = function size () {
+    return this._size;
 };
-Engine.prototype.setUniform = function setUniform (name, value) {
-	this._unif[name] = value;
+GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
+        var this$1 = this;
+
+    this._param[Backup.Index.Filter] = new Backup.Filter(bLMin, bLMag, iMip);
+    this.proc(function () {
+        this$1._applyParams(Backup.Flag.Filter);
+    });
 };
-Engine.prototype.addTechnique = function addTechnique (sh) {
-		var this$1 = this;
+GLTexture.prototype.setWrap = function setWrap (s, t) {
+        var this$1 = this;
+        if ( t === void 0 ) t = s;
 
-	var techL = sh.technique;
-	Object.keys(techL).forEach(function (k){
-		var v = techL[k];
-		this$1._tech[k] = v;
-	});
+    this._param[Backup.Index.Wrap] = new Backup.Wrap(s, t);
+    this.proc(function () {
+        this$1._applyParams(Backup.Flag.Wrap);
+    });
 };
-prototypeAccessors$2.technique.set = function (name) {
-	if(this._active)
-		{ this._active.program.unuse(); }
+GLTexture.prototype.setData = function setData (fmt, width, height, srcFmt, srcFmtType, pixels) {
+        var this$1 = this;
 
-	this._active = this._tech[name];
-	this._active.valueset.apply();
-	this._active.program.use();
-	this._unif = {};
+    Assert(srcFmtType === TexDataFormat.UB);
+    var assign;
+        (assign = [width, height], this._size.width = assign[0], this._size.height = assign[1]);
+    if (typeof pixels !== "undefined")
+        { pixels = pixels.slice(0); }
+    this._param[Backup.Index.Base] = new Backup.PixelData(this._size, fmt, pixels);
+    this.proc(function () {
+        this$1._applyParams(Backup.Flag.All);
+    });
 };
-prototypeAccessors$2.technique.get = function () {
-	return this._active;
+GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, pixels) {
+        var this$1 = this;
+
+    Assert(srcFmtType === TexDataFormat.UB);
+    var base = this._param[Backup.Index.Base];
+    base.writeSubData(this.size().width, rect.left, rect.top, rect.width(), pixels);
+    this.proc(function () {
+        gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.top, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
+    });
 };
-prototypeAccessors$2.program.get = function () {
-	return this.technique.program;
+GLTexture.prototype.setImage = function setImage (fmt, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+    Assert(srcFmtType === TexDataFormat.UB);
+    obj = obj.cloneNode(true);
+    var assign;
+        (assign = [obj.width, obj.height], this._size.width = assign[0], this._size.height = assign[1]);
+    this._param[Backup.Index.Base] = new Backup.ImageData(fmt, srcFmt, srcFmtType, obj);
+    this.proc(function () {
+        this$1._applyParams(Backup.Flag.All);
+    });
 };
-Engine.prototype.getScreenCoord = function getScreenCoord (pos) {
-	pos = pos.clone;
-	var w2 = this.width/2,
-		h2 = this.height/2;
-	pos.x = pos.x/w2 - 1;
-	pos.y = -pos.y/h2 + 1;
-	return pos;
+GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+    Assert(srcFmtType === TexDataFormat.UB);
+    this.proc(function () {
+        gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
+    });
 };
+GLTexture.prototype.genMipmap = function genMipmap () {
+        var this$1 = this;
 
-Object.defineProperties( Engine.prototype, prototypeAccessors$2 );
-
-var Vec2 = (function (Vec$$1) {
-	function Vec2(x,y) {
-		Vec$$1.call(this, 2, x,y);
-	}
-
-	if ( Vec$$1 ) Vec2.__proto__ = Vec$$1;
-	Vec2.prototype = Object.create( Vec$$1 && Vec$$1.prototype );
-	Vec2.prototype.constructor = Vec2;
-
-	Vec2.One = function One (n) {
-		return new Vec2(n,n);
-	};
-
-	return Vec2;
-}(Vec));
-
-var InputBuff = function InputBuff() {
-	this._clean();
+    this.proc(function () {
+        gl.generateMipmap(this$1._typeId());
+    });
 };
-InputBuff.prototype._clean = function _clean () {
-	this._key = {};
-	this._mkey = {};
-	this._wheelDelta = Vec2.One(0);
-	this._pos = null;
-	this._dblClick = null;
+GLTexture.prototype.bind_loose = function bind_loose () {
+    Assert(!this.isDiscarded(), "already discarded");
+    gl.bindTexture(this._typeId(), this.id());
+    ++this._bind;
 };
+// ----------------- from GLContext -----------------
+GLTexture.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
 
-// Idle: (Nothing)
-// Pressed: 1
-// Pressing: 2++
-// Released: -1
-var InputFlag = function InputFlag() {
-	this._clean();
+    this._rf.onContextLost(function () {
+        gl.deleteTexture(this$1._id);
+        this$1._id = null;
+    });
 };
+GLTexture.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
 
-var prototypeAccessors$6 = { position: {},doubleClicked: {},wheelDelta: {},positionDelta: {} };
-InputFlag.prototype._clean = function _clean () {
-	this._key = {};
-	this._mkey = {};
-	this._wheelDelta = Vec2.One(0);
-	this._pos = Vec3.One(0);
-	this._dblClick = false;
-	this._positionDelta = Vec2.One(0);
+    this._rf.onContextRestored(function () {
+        this$1._id = gl.createTexture();
+        this$1.proc(function () {
+            this$1._applyParams(Backup.Flag.All);
+        });
+    });
 };
-InputFlag.prototype.update = function update (ns) {
-	var Proc = function(m0, m1) {
-		for(var k in m0) {
-			if(m0[k] === -1)
-				{ delete m0[k]; }
-			else
-				{ ++m0[k]; }
-		}
-		for(var k$1 in m1) {
-			if(m1[k$1] === true) {
-				if(!m0[k$1] >= 1)
-					{ m0[k$1] = 1; }
-			} else {
-				m0[k$1] = -1;
-			}
-		}
-	};
-	// Keyboard
-	Proc(this._key, ns._key);
-	// Mouse
-	Proc(this._mkey, ns._mkey);
-	// Wheel
-	this._wheelDelta = ns._wheelDelta;
-	// DoubleClick
-	this._dblClick = (ns._dblClick) ? true : false;
-	// PositionDelta
-	if(ns._pos)
-		{ this._positionDelta = ns._pos.sub(this._pos); }
-	else
-		{ this._positionDelta = Vec2.One(0); }
-	// Pos
-	if(ns._pos)
-		{ this._pos = ns._pos.clone; }
+GLTexture.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
 };
-InputFlag.prototype.isMKeyPressed = function isMKeyPressed (code) { return this._mkey[code] === 1; };
-InputFlag.prototype.isMKeyPressing = function isMKeyPressing (code) { return this._mkey[code] >= 1; };
-InputFlag.prototype.isMKeyClicked = function isMKeyClicked (code) { return this._mkey[code] === -1; };
-InputFlag.prototype.isKeyPressed = function isKeyPressed (code) { return this._key[code] === 1; };
-InputFlag.prototype.isKeyPressing = function isKeyPressing (code) { return this._key[code] >= 1; };
-InputFlag.prototype.isKeyClicked = function isKeyClicked (code) { return this._key[code] === -1; };
-prototypeAccessors$6.position.get = function () {
-	return this._pos;
+// ----------------- from Bindable -----------------
+GLTexture.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(this._bind === 0, "already binded");
+    gl.bindTexture(this._typeId(), this.id());
+    ++this._bind;
 };
-prototypeAccessors$6.doubleClicked.get = function () {
-	return this._dblClick;
+GLTexture.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+    Assert(this._bind > 0, "not binded yet");
+    gl.bindTexture(this._typeId(), id);
+    --this._bind;
 };
-prototypeAccessors$6.wheelDelta.get = function () {
-	return this._wheelDelta;
+GLTexture.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(this._typeQueryId());
+    this.bind();
+    cb();
+    this.unbind(prev);
 };
-prototypeAccessors$6.positionDelta.get = function () {
-	return this._positionDelta;
+// ----------------- from Discardable -----------------
+GLTexture.prototype.discard = function discard () {
+    Assert(!this._bind, "still binding somewhere");
+    this.onContextLost();
+    this._rf.discard();
 };
-
-Object.defineProperties( InputFlag.prototype, prototypeAccessors$6 );
-
-var InputMgr = (function (Resource$$1) {
-	function InputMgr() {
-		var this$1 = this;
-
-		Resource$$1.call(this);
-		this._cur = new InputBuff();
-		this._switchBuff();
-		this._flag = new InputFlag();
-
-		this._events = {
-			mousedown: function (e){
-				this$1._cur._mkey[e.button] = true;
-			},
-			mouseup: function (e){
-				this$1._cur._mkey[e.button] = false;
-			},
-			mousemove: function (e){
-				this$1._cur._pos = new Vec2(e.pageX, e.pageY);
-			},
-			keydown: function (e){
-				this$1._cur._key[e.keyCode] = true;
-			},
-			keyup: function (e){
-				this$1._cur._key[e.keyCode] = false;
-			},
-			wheel: function (e){
-				this$1._cur._wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
-			},
-			dblclick: function (){
-				this$1._cur._dblClick = true;
-			},
-			touchstart: function (e){
-				e.preventDefault();
-				e.stopPropagation();
-				e = e.changedTouches[0];
-				var p = new Vec2(e.pageX, e.pageY);
-				this$1._prev._pos = this$1._cur._pos = p;
-				this$1._cur._mkey[0] = true;
-				return false;
-			},
-			touchmove: function (e){
-				e.preventDefault();
-				e.stopPropagation();
-				e = e.changedTouches[0];
-				this$1._cur._pos = new Vec2(e.pageX, e.pageY);
-				return false;
-			},
-			touchend: function (e){
-				e.preventDefault();
-				e.stopPropagation();
-				this$1._cur._mkey[0] = false;
-				return false;
-			},
-			touchcancel: function (e){
-				e.preventDefault();
-				e.stopPropagation();
-				this$1._cur._mkey[0] = false;
-				return false;
-			}
-		};
-		this._registerEvent();
-	}
-
-	if ( Resource$$1 ) InputMgr.__proto__ = Resource$$1;
-	InputMgr.prototype = Object.create( Resource$$1 && Resource$$1.prototype );
-	InputMgr.prototype.constructor = InputMgr;
-
-	var prototypeAccessors = { positionDelta: {},position: {},doubleClicked: {},wheelDelta: {} };
-	InputMgr.prototype.lockPointer = function lockPointer (elem) {
-		var api = [
-			"requestPointerLock",
-			"webkitRequestPointerLock",
-			"mozRequestPointerLock"
-		];
-		var len = api.length;
-		for(var i=0 ; i<len ; i++) {
-			if(elem[api[i]]) {
-				elem[api[i]]();
-				return;
-			}
-		}
-		Assert(false, "pointer lock API not found");
-	};
-	InputMgr.prototype.unlockPointer = function unlockPointer () {
-		var api = [
-			"exitPointerLock",
-			"webkitExitPointerLock",
-			"mozExitPointerLock"
-		];
-		var len = api.length;
-		for(var i=0 ; i<len ; i++) {
-			if(document[api[i]]) {
-				document[api[i]]();
-				return;
-			}
-		}
-		Assert(false, "pointer lock API not found");
-	};
-	InputMgr.prototype._registerEvent = function _registerEvent () {
-		var this$1 = this;
-
-		for(var k in this$1._events) {
-			document.addEventListener(k, this$1._events[k], {capture: true, passive: false});
-		}
-	};
-	InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
-		var this$1 = this;
-
-		for(var k in this$1._events) {
-			document.removeEventListener(k, this$1._events[k]);
-		}
-	};
-	InputMgr.prototype.discard = function discard () {
-		this._unregisterEvent();
-	};
-	InputMgr.prototype._switchBuff = function _switchBuff () {
-		this._prev = this._cur;
-		this._cur = new InputBuff();
-	};
-	InputMgr.prototype.update = function update () {
-		this._flag.update(this._cur);
-		this._switchBuff();
-	};
-	InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) { return this._flag.isMKeyPressed(code); };
-	InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) { return this._flag.isMKeyPressing(code); };
-	InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) { return this._flag.isMKeyClicked(code); };
-	InputMgr.prototype.isKeyPressed = function isKeyPressed (code) { return this._flag.isKeyPressed(code); };
-	InputMgr.prototype.isKeyPressing = function isKeyPressing (code) { return this._flag.isKeyPressing(code); };
-	InputMgr.prototype.isKeyClicked = function isKeyClicked (code) { return this._flag.isKeyClicked(code); };
-	prototypeAccessors.positionDelta.get = function () {
-		return this._flag.positionDelta;
-	};
-	prototypeAccessors.position.get = function () {
-		return this._flag.position;
-	};
-	prototypeAccessors.doubleClicked.get = function () {
-		return this._flag.doubleClicked;
-	};
-	prototypeAccessors.wheelDelta.get = function () {
-		return this._flag.wheelDelta;
-	};
-
-	Object.defineProperties( InputMgr.prototype, prototypeAccessors );
-
-	return InputMgr;
-}(Resource));
-
-var State = function State () {};
-
-State.prototype.onEnter = function onEnter (self, prev) {};
-State.prototype.onExit = function onExit (self, next) {};
-State.prototype.onUpdate = function onUpdate (self, dt) {};
-State.prototype.onDown = function onDown (self) {};
-State.prototype.onUp = function onUp (self) {};
-
-var NullState = new State();
-var FSMachine = (function (GObject$$1) {
-	function FSMachine(p, state) {
-		GObject$$1.call(this, p);
-		Assert$1(state instanceof State);
-		this._state = state;
-		this._nextState = null;
-		state.onEnter(this);
-	}
-
-	if ( GObject$$1 ) FSMachine.__proto__ = GObject$$1;
-	FSMachine.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	FSMachine.prototype.constructor = FSMachine;
-	FSMachine.prototype._doSwitchState = function _doSwitchState () {
-		var this$1 = this;
-
-		for(;;) {
-			var ns = this$1._nextState;
-			if(!ns)
-				{ break; }
-
-			this$1._nextState = null;
-			var old = this$1._state;
-			old.onExit(this$1, ns);
-			this$1._state = ns;
-			ns.onEnter(this$1, old);
-		}
-	};
-	FSMachine.prototype.setState = function setState (st) {
-		Assert$1(!this._nextState);
-		this._nextState = st;
-	};
-	FSMachine.prototype.onUpdate = function onUpdate (dt) {
-		if(this.alive) {
-			this._state.onUpdate(this, dt);
-			this._doSwitchState();
-		}
-		return this.alive;
-	};
-	FSMachine.prototype.onDown = function onDown () {
-		this._state.onDown(this);
-	};
-	FSMachine.prototype.onUp = function onUp () {
-		this._state.onUp(this);
-	};
-	FSMachine.prototype.destroy = function destroy () {
-		if(this.alive) {
-			GObject$$1.prototype.destroy.call(this);
-			this.setState(NullState);
-			this._doSwitchState();
-		}
-	};
-
-	return FSMachine;
-}(GObject));
-
-var UpdGroup = (function (GObject$$1) {
-	function UpdGroup(p) {
-		GObject$$1.call(this, p);
-		this._group = [];
-		this._add = null;
-		this._remove = null;
-	}
-
-	if ( GObject$$1 ) UpdGroup.__proto__ = GObject$$1;
-	UpdGroup.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	UpdGroup.prototype.constructor = UpdGroup;
-	UpdGroup.prototype._doAdd = function _doAdd () {
-		var this$1 = this;
-
-		var addL = this._add;
-		if(addL) {
-			addL.forEach(function (obj){
-				obj.onConnected(this$1);
-				this$1._group.push(obj);
-			});
-			this._add = null;
-			return true;
-		}
-		return false;
-	};
-	UpdGroup.prototype._removeSingle = function _removeSingle (obj) {
-		// 線形探索
-		var g = this._group;
-		var len = g.length;
-		for(var i=0 ; i<len ; i++) {
-			if(g[i] === obj)
-				{ g.splice(i, 1); }
-		}
-	};
-	UpdGroup.prototype._doRemove = function _doRemove () {
-		var this$1 = this;
-
-		var remL = this._remove;
-		if(remL) {
-			var len = remL.length;
-			for(var i=0 ; i<len ; i++)
-				{ this$1._removeSingle(remL[i]); }
-			this._remove = null;
-			return true;
-		}
-		return false;
-	};
-	UpdGroup.prototype._sort = function _sort () {
-		this._group.sort(function (a,b){
-			return a.priority > b.priority;
-		});
-	};
-	UpdGroup.prototype._doAddRemove = function _doAddRemove () {
-		if(this._doAdd() | this._doRemove()) {
-			this._sort();
-		}
-	};
-	UpdGroup.prototype.onUpdate = function onUpdate (dt) {
-		var this$1 = this;
-
-		this._doAddRemove();
-		var g = this._group;
-		for(var i=0 ; i<g.length ; i++) {
-			if(!g[i].onUpdate(dt))
-				{ this$1.remove(g[i]); }
-		}
-		this._doAddRemove();
-	};
-	UpdGroup.prototype.add = function add (obj) {
-		Assert$1(obj instanceof GObject$$1);
-		if(!this._add)
-			{ this._add = []; }
-		this._add.push(obj);
-	};
-	UpdGroup.prototype.remove = function remove (obj) {
-		Assert$1(obj instanceof GObject$$1);
-		if(!this._remove)
-			{ this._remove = []; }
-		this._remove.push(obj);
-	};
-
-	return UpdGroup;
-}(GObject));
-
-var Scene = (function (FSMachine$$1) {
-	function Scene(p, state) {
-		FSMachine$$1.call(this, p, state);
-		this._update = new UpdGroup();
-		this._draw = new UpdGroup();
-	}
-
-	if ( FSMachine$$1 ) Scene.__proto__ = FSMachine$$1;
-	Scene.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
-	Scene.prototype.constructor = Scene;
-
-	var prototypeAccessors = { updateGroup: {},drawGroup: {} };
-	prototypeAccessors.updateGroup.get = function () {
-		return this._update;
-	};
-	prototypeAccessors.drawGroup.get = function () {
-		return this._draw;
-	};
-	Scene.prototype.onUpdate = function onUpdate (dt) {
-		FSMachine$$1.prototype.onUpdate.call(this, dt);
-		this._update.onUpdate(dt);
-	};
-	Scene.prototype.onDraw = function onDraw () {
-		this._draw.onUpdate(0);
-	};
-
-	Object.defineProperties( Scene.prototype, prototypeAccessors );
-
-	return Scene;
-}(FSMachine));
-
-function OutputError(where, msg) {
-	console.log(("Error in " + where + ": " + msg));
-}
-
-var ESceneMgrState = {
-	Idle: Symbol(),
-	Draw: Symbol(),
-	Proc: Symbol()
-};
-var SceneMgr = (function (GObject$$1) {
-	function SceneMgr(firstScene) {
-		GObject$$1.call(this);
-		this._scene = [];
-		this._nextScene = null;
-		this._nPop = 0;
-		this._state = ESceneMgrState.Idle;
-
-		this.push(firstScene);
-		firstScene.onUp();
-		this._proceed();
-	}
-
-	if ( GObject$$1 ) SceneMgr.__proto__ = GObject$$1;
-	SceneMgr.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	SceneMgr.prototype.constructor = SceneMgr;
-
-	var prototypeAccessors = { top: {},length: {},_empty: {} };
-	SceneMgr.prototype.push = function push (scene, bPop) {
-		Assert$1(scene instanceof Scene);
-		// 描画メソッドでのシーン変更は禁止
-		Assert$1(this._state !== ESceneMgrState.Draw);
-		// 一度に2つ以上のシーンを積むのは禁止
-		Assert$1(!this._nextScene);
-		// popした後に積むのも禁止
-		Assert$1(this._nPop === 0);
-
-		this._nextScene = scene;
-		this._nPop = bPop ? 1 : 0;
-	};
-	SceneMgr.prototype.pop = function pop (n) {
-		if ( n === void 0 ) n = 1;
-
-		// 描画メソッドでのシーン変更は禁止
-		Assert$1(this._state !== ESceneMgrState.Draw);
-		// pushした後にpopはNG
-		Assert$1(!this._nextScene);
-		Assert$1(this._nPop === 0);
-		this._nPop = n;
-	};
-	SceneMgr.prototype._proceed = function _proceed () {
-		var this$1 = this;
-
-		Assert$1(this._state === ESceneMgrState.Idle);
-		this._state = ESceneMgrState.Proc;
-
-		var b = false;
-		while(this._nPop > 0) {
-			--this$1._nPop;
-			b = true;
-
-			var t = this$1._scene.pop();
-			t.destroy();
-			if(this$1._scene.length === 0) {
-				this$1._nPop = 0;
-				break;
-			}
-			this$1.top.onDown();
-		}
-		var ns = this._nextScene;
-		if(ns) {
-			this._nextScene = null;
-			this._scene.push(ns);
-			ns.onUp();
-			b = true;
-		}
-
-		this._state = ESceneMgrState.Idle;
-		return b;
-	};
-	prototypeAccessors.top.get = function () {
-		return this._scene[this._scene.length-1];
-	};
-	prototypeAccessors.length.get = function () {
-		return this._scene.length;
-	};
-	prototypeAccessors._empty.get = function () {
-		return this.length === 0;
-	};
-	SceneMgr.prototype.onUpdate = function onUpdate (dt) {
-		var this$1 = this;
-
-		for(;;) {
-			if(this$1._empty)
-				{ return false; }
-			try {
-				this$1.top.onUpdate(dt);
-			} catch(e) {
-				OutputError("scenemgr::onupdate()", e.message);
-			}
-			if(!this$1._proceed())
-				{ break; }
-		}
-		return !this._empty;
-	};
-	SceneMgr.prototype.onDraw = function onDraw () {
-		Assert$1(this._state === ESceneMgrState.Idle);
-		this._state = ESceneMgrState.Draw;
-		try {
-			this.top.onDraw();
-		} catch(e) {
-			OutputError("scenemgr::ondraw()", e.message);
-		}
-		this._state = ESceneMgrState.Idle;
-	};
-
-	Object.defineProperties( SceneMgr.prototype, prototypeAccessors );
-
-	return SceneMgr;
-}(GObject));
-
-var Loop = function Loop() {
-	this._invalidate();
-};
-
-var prototypeAccessors$7 = { running: {},targetFps: {},accum: {},currentFps: {} };
-Loop.prototype._invalidate = function _invalidate () {
-	this._timerId = null;
-	this._callback = null;
-	this._targetFps = null;
-	this._prevTime = null;		// 前回フレーム更新した時間
-	this._prevFpsTime = null;	// 前回FPSカウンタを更新した時間
-	this._accumFps = 0;
-	this._currentFps = 0;
-	this._beginTime = null;
-	this._accum = 0;			// 累積フレーム数
-};
-prototypeAccessors$7.running.get = function () {
-	return !(this._timerId === null);
-};
-prototypeAccessors$7.targetFps.get = function () {
-	return this._targetFps;
-};
-prototypeAccessors$7.accum.get = function () {
-	return this._accum;
-};
-prototypeAccessors$7.currentFps.get = function () {
-	return this._currentFps;
-};
-Loop._CalcFPSArray = function _CalcFPSArray (fps) {
-	var gcd = TM.GCD(1000, fps);
-	var div0 = 1000 / gcd,
-		div1 = fps / gcd;
-	var df = Math.floor(div0 / div1);
-	var tmp = [];
-	for(var i=0 ; i<div1 ; i++) {
-		tmp.push(df);
-	}
-	var dc = df * div1;
-	for(var i$1=0 ; i$1<(div0-dc) ; i$1++)
-		{ ++tmp[i$1]; }
-	return tmp;
-};
-Loop.prototype.start = function start (targetFps, cb) {
-	this.stop();
-	this._targetFps = targetFps;
-	this._callback = cb;
-	var now = new Date().getTime();
-	this._prevTime = now;
-	this._beginTime = now;
-	this._prevFpsTime = now;
-	var self = this;
-
-	var fps_array = Loop._CalcFPSArray(targetFps);
-	var fps_ptr = 0;
-	this._timerId = (function Tmp(){
-		self._timerId = setTimeout(Tmp, fps_array[fps_ptr]);
-		fps_ptr = (++fps_ptr)%fps_array.length;
-
-		var now = new Date().getTime();
-		if(now - self._prevFpsTime >= 1000) {
-			self._currentFps = self._accumFps;
-			self._accumFps = 0;
-			self._prevFpsTime = now;
-			// while(self._prevFpsTime <= now-1000)
-			// self._prevFpsTime += 1000;
-		}
-		++self._accum;
-		++self._accumFps;
-
-		self._callback((now - self._prevTime)/1000);
-		self._prevTime = now;
-	})();
-};
-Loop.prototype.stop = function stop () {
-	if(this._timerId) {
-		clearTimeout(this._timerId);
-		this._invalidate();
-	}
-};
-
-Object.defineProperties( Loop.prototype, prototypeAccessors$7 );
-
-/* global gl */
-var ShaderError = (function (Error) {
-	function ShaderError(id) {
-		Error.call(
-			this, "\n"
-			+ PaddingString(32, "-")
-			+ AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
-			+ PaddingString(32, "-")
-			+ "\n"
-			+ gl.getShaderInfoLog(id)
-			+ "\n"
-		);
-	}
-
-	if ( Error ) ShaderError.__proto__ = Error;
-	ShaderError.prototype = Object.create( Error && Error.prototype );
-	ShaderError.prototype.constructor = ShaderError;
-
-	var prototypeAccessors = { name: {} };
-	prototypeAccessors.name.get = function () {
-		return "ShaderError";
-	};
-
-	Object.defineProperties( ShaderError.prototype, prototypeAccessors );
-
-	return ShaderError;
-}(Error));
-var GLShader = function GLShader(type, src) {
-	var id = gl.createShader(type);
-	gl.shaderSource(id, src);
-	gl.compileShader(id);
-	if(gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
-		this._id = id;
-	} else {
-		throw new ShaderError(id);
-	}
-};
-
-var prototypeAccessors$1$2 = { id: {} };
-prototypeAccessors$1$2.id.get = function () {
-	return this._id;
-};
-GLShader.prototype.discard = function discard () {
-	Assert$1(this._id, "already discarded");
-	this._id = null;
-};
-
-Object.defineProperties( GLShader.prototype, prototypeAccessors$1$2 );
-
-/* global gl */
-var GLVShader = (function (GLShader$$1) {
-	function GLVShader(src) {
-		GLShader$$1.call(this, gl.VERTEX_SHADER, src);
-	}
-
-	if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
-	GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-	GLVShader.prototype.constructor = GLVShader;
-
-	return GLVShader;
-}(GLShader));
-
-/* global gl */
-var GLFShader = (function (GLShader$$1) {
-	function GLFShader(src) {
-		GLShader$$1.call(this, gl.FRAGMENT_SHADER, src);
-	}
-
-	if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
-	GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-	GLFShader.prototype.constructor = GLFShader;
-
-	return GLFShader;
-}(GLShader));
-
-/* global gl */
-var GLTexture2D = (function (GLTexture$$1) {
-	function GLTexture2D () {
-		GLTexture$$1.apply(this, arguments);
-	}
-
-	if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
-	GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
-	GLTexture2D.prototype.constructor = GLTexture2D;
-
-	var prototypeAccessors = { typeId: {} };
-
-	prototypeAccessors.typeId.get = function () {
-		return gl.TEXTURE_2D;
-	};
-
-	Object.defineProperties( GLTexture2D.prototype, prototypeAccessors );
-
-	return GLTexture2D;
-}(GLTexture));
-
-var ProgramError = (function (Error) {
-	function ProgramError(id) {
-		Error.call(this, gl.getProgramInfoLog(id));
-	}
-
-	if ( Error ) ProgramError.__proto__ = Error;
-	ProgramError.prototype = Object.create( Error && Error.prototype );
-	ProgramError.prototype.constructor = ProgramError;
-
-	var prototypeAccessors = { name: {} };
-	prototypeAccessors.name.get = function () {
-		return "ProgramError";
-	};
-
-	Object.defineProperties( ProgramError.prototype, prototypeAccessors );
-
-	return ProgramError;
-}(Error));
-/* global gl */
-var GLProgram = (function (Resource$$1) {
-	function GLProgram(vs, fs) {
-		Resource$$1.call(this);
-		var prog = gl.createProgram();
-		gl.attachShader(prog, vs.id);
-		gl.attachShader(prog, fs.id);
-		gl.linkProgram(prog);
-		if(gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-			this._id = prog;
-		} else
-			{ throw new ProgramError(prog); }
-		{
-			var attr = {};
-			var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
-			for(var i=0 ; i<nAtt ; i++) {
-				var a = gl.getActiveAttrib(prog, i);
-				attr[a.name] = {
-					index: gl.getAttribLocation(prog, a.name),
-					size: a.size,
-					type: a.type,
-					info: glc.GLSLTypeInfo[a.type]
-				};
-				Assert$1(attr[a.name].info);
-			}
-			this._attribute = attr;
-		}
-		{
-			var unif = {};
-			var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
-			for(var i$1=0 ; i$1<nUnif ; i$1++) {
-				var u = gl.getActiveUniform(prog, i$1);
-				unif[u.name] = {
-					index: gl.getUniformLocation(prog, u.name),
-					size: u.size,
-					type: u.type,
-					info: glc.GLSLTypeInfo[u.type]
-				};
-				Assert$1(unif[u.name].info);
-			}
-			this._uniform = unif;
-		}
-
-		this._bBind = false;
-	}
-
-	if ( Resource$$1 ) GLProgram.__proto__ = Resource$$1;
-	GLProgram.prototype = Object.create( Resource$$1 && Resource$$1.prototype );
-	GLProgram.prototype.constructor = GLProgram;
-
-	var prototypeAccessors$1 = { id: {} };
-	prototypeAccessors$1.id.get = function () {
-		return this._id;
-	};
-	GLProgram.prototype.use = function use () {
-		Assert$1(this.id, "already discarded");
-		Assert$1(!this._bBind, "already binded");
-		gl.useProgram(this.id);
-		this._bBind = true;
-	};
-	GLProgram.prototype.unuse = function unuse () {
-		Assert$1(this._bBind, "not binding anywhere");
-		gl.useProgram(null);
-		this._bBind = false;
-	};
-	GLProgram.prototype.discard = function discard () {
-		Assert$1(!this._bBind);
-		Assert$1(this.id, "already discarded");
-		gl.deleteProgram(this.id);
-		this._id = null;
-	};
-	GLProgram.prototype.hasUniform = function hasUniform (name) {
-		return this._uniform[name] !== undefined;
-	};
-	/*!
-		\param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
-	*/
-	GLProgram.prototype.setUniform = function setUniform (name, value) {
-		var u = this._uniform[name];
-		if(u) {
-			Assert$1(u.info);
-			var f = u.info.uniformF;
-			if(value instanceof Array) {
-				// [matrix...] or [vector...]
-				f.call(gl, u.index, VMToArray.apply(void 0, value));
-			} else {
-				// matrix or vector or float or int
-				if(IsMatrix(value))
-					{ f.call(gl, u.index, false, value.value); }
-				else if(IsVector(value))
-					{ f.call(gl, u.index, value.value); }
-				else
-					{ f.call(gl, u.index, value); }
-			}
-		}
-	};
-	/*!
-		\param[in] data	[vector...] or GLVBuffer
-	*/
-	GLProgram.prototype.setVStream = function setVStream (name, data) {
-		var a = this._attribute[name];
-		if(a) {
-			if(data instanceof Array) {
-				// [vector...]
-				a.info.vertexF(a.index, VectorToArray(data));
-			} else {
-				// GLVBuffer
-				data.bind();
-				gl.enableVertexAttribArray(a.index);
-				gl.vertexAttribPointer(a.index, data.dim, data.type, false, data.typesize*data.dim, 0);
-				data.unbind();
-			}
-		}
-	};
-
-	Object.defineProperties( GLProgram.prototype, prototypeAccessors$1 );
-
-	return GLProgram;
-}(Resource));
-
-function ToLowercaseKeys(ar) {
-	var ret = {};
-	Object.keys(ar).forEach(
-		function(k) {
-			var val = ar[k];
-			if(typeof val === "string")
-				{ val = val.toLowerCase(); }
-			else if(val instanceof Array) {
-				for(var i=0 ; i<val.length ; i++) {
-					if(typeof val[i] === "string")
-						{ val[i] = val[i].toLowerCase(); }
-				}
-			}
-			ret[k.toLowerCase()] = val;
-		}
-	);
-	return ret;
-}
-/* global gl */
-var GLValueSet = function GLValueSet() {
-	this.boolset = [];
-	this.valueset = {};
-};
-GLValueSet.FromJSON = function FromJSON (js) {
-	var ret = new GLValueSet();
-	var bs = js.boolset;
-	var bsf = {};
-	for(var i=0 ; i<bs.length ; i++) {
-		bsf[bs[i]] = true;
-	}
-	ret.boolset = ToLowercaseKeys(bsf);
-	ret.valueset = ToLowercaseKeys(js.valueset);
-	return ret;
-};
-GLValueSet.prototype.enable = function enable (name) {
-	this.boolset[name] = true;
-};
-GLValueSet.prototype.disable = function disable (name) {
-	delete this.boolset[name];
-};
-GLValueSet.prototype.apply = function apply () {
-		var this$1 = this;
-
-	// boolset
-	for(var k in glc.GLBoolSetting) {
-		var func = (this$1.boolset[k] === true) ? gl.enable : gl.disable;
-		func.call(gl, glc.GLBoolSetting[k]);
-	}
-	// valueset
-	for(var k$1 in this$1.valueset) {
-		var args = this$1.valueset[k$1];
-		var func$1 = glc.GLValueSetting[k$1];
-		if(args instanceof Array)
-			{ func$1.call(gl, args[0], args[1], args[2], args[3]); }
-		else
-			{ func$1.call(gl, args); }
-	}
-};
-
-/* global resource */
-var Technique = function Technique(src) {
-	var tech = {};
-	Object.keys(src.technique).forEach(function (k){
-		var v = src.technique[k];
-		tech[k] = {
-			valueset: GLValueSet.FromJSON(resource.getResource(v.valueset)),
-			program: new GLProgram(
-				resource.getResource(v.vshader),
-				resource.getResource(v.fshader)
-			)
-		};
-	});
-	this._tech = tech;
-};
-
-var prototypeAccessors$10 = { technique: {} };
-prototypeAccessors$10.technique.get = function () {
-	return this._tech;
-};
-
-Object.defineProperties( Technique.prototype, prototypeAccessors$10 );
-
-var EResource = {
-	VertexShader: Symbol(),
-	FragmentShader: Symbol(),
-	Image: Symbol(),
-	JSON: Symbol(),
-	Technique: Symbol()
+GLTexture.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
 };
 
 var ResourceExtToType = {};
-ResourceExtToType.vsh = EResource.VertexShader;
-ResourceExtToType.fsh = EResource.FragmentShader;
-ResourceExtToType.png = EResource.Image;
-ResourceExtToType.jpg = EResource.Image;
-ResourceExtToType.def = EResource.JSON;
-ResourceExtToType.prog = EResource.Technique;
-
 var ResourceInfo = {};
-ResourceInfo[EResource.VertexShader] = {
-	makeLoader: function(url) {
-		return new XHR_Loader(url, "text");
-	},
-	makeResource: function(src) {
-		return new GLVShader(src);
-	}
-};
-ResourceInfo[EResource.FragmentShader] = {
-	makeLoader: function(url) {
-		return new XHR_Loader(url, "text");
-	},
-	makeResource: function(src) {
-		return new GLFShader(src);
-	}
-};
-ResourceInfo[EResource.Image] = {
-	makeLoader: function(url) {
-		return new Image_Loader(url);
-	},
-	makeResource: function(src) {
-		var tex = new GLTexture2D();
-		tex.setImage(0, glc.E_InterFormat.RGBA, glc.E_InterFormat.RGBA, glc.E_TexDataFormat.UB, src);
-		tex.genMipmap();
-		return tex;
-	}
-};
-ResourceInfo[EResource.JSON] = {
-	makeLoader: function(url) {
-		return new XHR_Loader(url, "json");
-	},
-	makeResource: function(src) {
-		return src;
-	}
-};
-/* global resource */
-ResourceInfo[EResource.Technique] = {
-	makeLoader: function(url) {
-		return new XHR_Loader(url, "json");
-	},
-	makeResource: function(src) {
-		// 必要なリソースがまだ足りてなければ関数を引数にしてコール
-		if(!resource.checkResource(src.dependancy)) {
-			return new MoreResource(src.dependancy);
-		} else
-			{ return new Technique(src); }
-	}
-};
-
 function GetResourceInfo(fpath) {
-	// 拡張子でリソースタイプを判断
-	var ext = ExtractExtension(fpath);
-	if(!ext)
-		{ throw new Error("no extension found"); }
-	ext = ResourceExtToType[ext];
-	if(!ext)
-		{ throw new Error("unknown extension"); }
-	var info = ResourceInfo[ext];
-	if(!info)
-		{ throw new Error("loader not found"); }
-	return info;
+    // 拡張子でリソースタイプを判断
+    var ext = ExtractExtension(fpath);
+    if (!ext)
+        { throw new Error("no extension found"); }
+    var rtype = ResourceExtToType[ext];
+    if (typeof rtype === "undefined")
+        { throw new Error("unknown extension"); }
+    var info = ResourceInfo[rtype];
+    if (!info)
+        { throw new Error("loader not found"); }
+    return info;
 }
-
 var MoreResource = function MoreResource() {
-	var arg = [], len = arguments.length;
-	while ( len-- ) arg[ len ] = arguments[ len ];
+    var arg = [], len = arguments.length;
+    while ( len-- ) arg[ len ] = arguments[ len ];
 
-	this._array = [].concat( arg );
+    this.depend = arg;
 };
-
-var prototypeAccessors$9 = { array: {} };
-prototypeAccessors$9.array.get = function () {
-	return this._array;
-};
-
-Object.defineProperties( MoreResource.prototype, prototypeAccessors$9 );
-
-var XHR_Loader = function XHR_Loader(url, type) {
-	var this$1 = this;
-
-	var xhr = new XMLHttpRequest();
-	xhr.open("GET", url);
-	xhr.responseType = type;
-	xhr.onload = function (){
-		var xhr = this$1._xhr;
-		if(xhr.readyState === 4) {
-			if(xhr.status === 200) {
-				this$1._status = "complete";
-				this$1._cbCompleted();
-			} else {
-				this$1._status = "error";
-				this$1._errormsg = xhr.statusText;
-				this$1._cbError();
-			}
-		}
-	};
-	xhr.onerror = function (){
-		this$1._errormsg = "unknown error";
-		this$1._cbError();
-	};
-	this._status = "idle";
-	this._xhr = xhr;
-};
-
-var prototypeAccessors$1$1 = { errormsg: {},status: {},result: {} };
-XHR_Loader.prototype.begin = function begin (cbCompleted, cbError) {
-	this._cbCompleted = cbCompleted;
-	this._cbError = cbError;
-	this._status = "loading";
-	this._xhr.send(null);
-};
-XHR_Loader.prototype.abort = function abort () {
-	this._status = "abort";
-	this._xhr.abort();
-};
-prototypeAccessors$1$1.errormsg.get = function () {
-	return this._errormsg;
-};
-prototypeAccessors$1$1.status.get = function () {
-	return this._status;
-};
-prototypeAccessors$1$1.result.get = function () {
-	return this._xhr.response;
-};
-
-Object.defineProperties( XHR_Loader.prototype, prototypeAccessors$1$1 );
-var Image_Loader = function Image_Loader(url) {
-	var this$1 = this;
-
-	var img = new Image();
-	img.onload = function (){
-		this$1._timerId = null;
-		this$1._status = "complete";
-		this$1._cbCompleted();
-	};
-	this._url = url;
-	this._img = img;
-	this._status = "idle";
-};
-
-var prototypeAccessors$2$1 = { errormsg: {},status: {},result: {} };
-Image_Loader.prototype.begin = function begin (cbCompleted, cbError) {
-		var this$1 = this;
-
-	this._timerId = setTimeout(function (){
-		if(this$1._timerId) {
-			// timeout
-			this$1._status = "error";
-			this$1._errormsg = "connection timedout";
-			this$1._cbError();
-		}
-	}, 5000);
-	this._cbCompleted = cbCompleted;
-	this._cbError = cbError;
-	this._img.src = this._url;
-	this._status = "loading";
-};
-Image_Loader.prototype.abort = function abort () {
-	// 非対応
-	this._status = "abort";
-};
-prototypeAccessors$2$1.errormsg.get = function () {
-	return this._errormsg;
-};
-prototypeAccessors$2$1.status.get = function () {
-	return this._status;
-};
-prototypeAccessors$2$1.result.get = function () {
-	return this._img;
-};
-
-Object.defineProperties( Image_Loader.prototype, prototypeAccessors$2$1 );
 function ASyncGet(loaders, maxConnection, cbComplete, cbError) {
-	var lastCur = 0;
-	var nComp = 0;
-	var task = [];
-	function Request(taskIndex) {
-		var cur = lastCur++;
-		Assert$1(cur < loaders.length);
-		Assert$1(task[taskIndex] === null);
-		task[taskIndex] = cur;
-		loaders[cur].begin(
-			function(){
-				OnComplete(taskIndex);
-			},
-			function(){
-				OnError(taskIndex);
-			}
-		);
-	}
-	function OnError(taskIndex) {
-		// 他のタスクを全て中断
-		for(var i=0 ; i<task.length ; i++) {
-			var li = task[i];
-			if(li !== null && li !== taskIndex) {
-				loaders[li].abort();
-			}
-		}
-		cbError();
-	}
-	function OnComplete(taskIndex) {
-		Assert$1(typeof task[taskIndex] === "number");
-		task[taskIndex] = null;
-		++nComp;
-		if(lastCur < loaders.length) {
-			// 残りのタスクを開始
-			Request(taskIndex);
-		} else {
-			if(nComp === loaders.length)
-				{ cbComplete(); }
-		}
-	}
-	for(var i=0 ; i<Math.min(loaders.length, maxConnection) ; i++) {
-		task[i] = null;
-		Request(i);
-	}
+    var lastCur = 0;
+    var nComp = 0;
+    var task = [];
+    function Request(taskIndex) {
+        var cur = lastCur++;
+        Assert(cur < loaders.length);
+        Assert(task[taskIndex] === null);
+        task[taskIndex] = cur;
+        loaders[cur].begin(function () {
+            OnComplete(taskIndex);
+        }, function () {
+            OnError(taskIndex);
+        });
+    }
+    function OnError(taskIndex) {
+        // 他のタスクを全て中断
+        for (var i = 0; i < task.length; i++) {
+            var li = task[i];
+            if (li !== null && li !== taskIndex) {
+                loaders[li].abort();
+            }
+        }
+        cbError();
+    }
+    function OnComplete(taskIndex) {
+        Assert(typeof task[taskIndex] === "number");
+        task[taskIndex] = null;
+        ++nComp;
+        if (lastCur < loaders.length) {
+            // 残りのタスクを開始
+            Request(taskIndex);
+        }
+        else {
+            if (nComp === loaders.length)
+                { cbComplete(); }
+        }
+    }
+    for (var i = 0; i < Math.min(loaders.length, maxConnection); i++) {
+        task[i] = null;
+        Request(i);
+    }
 }
 
-var ResStack = function ResStack(base) {
-	this._resource = [];
-	this._base = base;
-	this._alias = {};
-	this.pushFrame();
+var ResourceWrap = function ResourceWrap(data) {
+    this.data = data;
+    this._bDiscard = false;
+};
+// ------------ from Discardable ------------
+ResourceWrap.prototype.isDiscarded = function isDiscarded () {
+    return this._bDiscard;
+};
+ResourceWrap.prototype.discard = function discard () {
+    Assert(!this._bDiscard, "already discarded");
+    this._bDiscard = true;
 };
 
-var prototypeAccessors$8 = { resourceLength: {} };
+var ResLayer = function ResLayer() {
+    this.resource = {};
+};
+var NoSuchResource = (function (Error) {
+    function NoSuchResource(name) {
+        Error.call(this, ("no such resource \"" + name + "\""));
+        this.name = name;
+    }
+
+    if ( Error ) NoSuchResource.__proto__ = Error;
+    NoSuchResource.prototype = Object.create( Error && Error.prototype );
+    NoSuchResource.prototype.constructor = NoSuchResource;
+
+    return NoSuchResource;
+}(Error));
+var ResState;
+(function (ResState) {
+    ResState[ResState["Idle"] = 0] = "Idle";
+    ResState[ResState["Loading"] = 1] = "Loading";
+    ResState[ResState["Restoreing"] = 2] = "Restoreing";
+})(ResState || (ResState = {}));
+var RState;
+(function (RState) {
+    var State = function State () {};
+
+    State.prototype.addAlias = function addAlias (self, alias) {
+        AssertF("invalid function call");
+    };
+    State.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
+        AssertF("invalid function call");
+    };
+    State.prototype.popFrame = function popFrame (self, n) {
+        AssertF("invalid function call");
+    };
+    State.prototype.discard = function discard (self) {
+        AssertF("invalid function call");
+    };
+    RState.State = State;
+    var IdleState = (function (State) {
+        function IdleState () {
+            State.apply(this, arguments);
+        }
+
+        if ( State ) IdleState.__proto__ = State;
+        IdleState.prototype = Object.create( State && State.prototype );
+        IdleState.prototype.constructor = IdleState;
+
+        IdleState.prototype.addAlias = function addAlias (self, alias) {
+            var a = self._alias;
+            Object.keys(alias).forEach(function (k) {
+                a[k] = alias[k];
+            });
+        };
+        IdleState.prototype.state = function state () {
+            return ResState.Idle;
+        };
+        IdleState.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
+            Assert(res instanceof Array
+                && cbComplete instanceof Function
+                && cbError instanceof Function);
+            self._state = new RState.LoadingState();
+            // 重複してるリソースはロード対象に入れない
+            {
+                var res2 = [];
+                for (var i = 0; i < res.length; i++) {
+                    if (!self.checkResource(res[i])) {
+                        res2.push(res[i]);
+                    }
+                }
+                res = res2;
+            }
+            var dst;
+            if (bSame) {
+                dst = self._resource.back();
+            }
+            else {
+                dst = self._pushFrame();
+            }
+            var loaderL = [];
+            var infoL = [];
+            for (var i$1 = 0; i$1 < res.length; i$1++) {
+                var url = self._makeFPath(res[i$1]);
+                if (!url)
+                    { throw new Error(("unknown resource name \"" + (res[i$1]) + "\"")); }
+                var info = GetResourceInfo(url);
+                loaderL.push(info.makeLoader(url));
+                infoL.push(info);
+            }
+            var fb = function () {
+                Assert(self.state() === ResState.Loading);
+                self._state = new RState.IdleState();
+                var later = [];
+                var laterId = [];
+                for (var i = 0; i < infoL.length; i++) {
+                    try {
+                        var r = infoL[i].makeResource(loaderL[i].result());
+                        dst.resource[res[i]] = r;
+                    }
+                    catch (e) {
+                        if (!(e instanceof MoreResource)) {
+                            throw e;
+                        }
+                        // 必要なリソースがまだ足りてなければMoreResourceが送出される
+                        var m = e;
+                        later = later.concat.apply(later, m.depend);
+                        laterId.push(i);
+                    }
+                }
+                if (!later.empty()) {
+                    // 再度リソース読み込みをかける
+                    self.loadFrame(later, function () {
+                        for (var i = 0; i < laterId.length; i++) {
+                            var id = laterId[i];
+                            var r = infoL[id].makeResource(loaderL[id].result());
+                            dst.resource[res[id]] = r;
+                        }
+                        // すべてのリソース読み込み完了
+                        cbComplete();
+                    }, cbError, true);
+                }
+                else {
+                    // すべてのリソース読み込み完了
+                    cbComplete();
+                }
+            };
+            ASyncGet(loaderL, 2, fb, function () {
+                cbError();
+            });
+        };
+        IdleState.prototype.resourceLength = function resourceLength (self) {
+            return self._resource.length;
+        };
+        IdleState.prototype.popFrame = function popFrame (self, n) {
+            var resA = self._resource;
+            Assert(resA.length >= n);
+            // 明示的な開放処理
+            var loop = function () {
+                var res = resA.pop();
+                Object.keys(res.resource).forEach(function (k) {
+                    res.resource[k].discard();
+                });
+                --n;
+            };
+
+            while (n > 0) loop();
+        };
+        IdleState.prototype.discard = function discard (self) {
+            self._df.discard();
+        };
+
+        return IdleState;
+    }(State));
+    RState.IdleState = IdleState;
+    var LoadingState = (function (State) {
+        function LoadingState () {
+            State.apply(this, arguments);
+        }
+
+        if ( State ) LoadingState.__proto__ = State;
+        LoadingState.prototype = Object.create( State && State.prototype );
+        LoadingState.prototype.constructor = LoadingState;
+
+        LoadingState.prototype.state = function state () {
+            return ResState.Loading;
+        };
+        LoadingState.prototype.resourceLength = function resourceLength (self) {
+            return self._resource.length - 1;
+        };
+
+        return LoadingState;
+    }(State));
+    RState.LoadingState = LoadingState;
+    var RestoreingState = (function (State) {
+        function RestoreingState () {
+            State.apply(this, arguments);
+        }
+
+        if ( State ) RestoreingState.__proto__ = State;
+        RestoreingState.prototype = Object.create( State && State.prototype );
+        RestoreingState.prototype.constructor = RestoreingState;
+
+        RestoreingState.prototype.state = function state () {
+            return ResState.Restoreing;
+        };
+        RestoreingState.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
+            new IdleState().loadFrame(self, res, cbComplete, cbError, bSame);
+        };
+        RestoreingState.prototype.resourceLength = function resourceLength (self) {
+            return self._resource.length - 1;
+        };
+
+        return RestoreingState;
+    }(State));
+    RState.RestoreingState = RestoreingState;
+})(RState || (RState = {}));
+// リソースをレイヤに分けて格納
+var ResStack = function ResStack(base) {
+    this._df = new ResourceWrap(null);
+    this._resource = [];
+    // リソース名 -> リソースパス
+    this._alias = {};
+    // 現在のステート
+    this._state = new RState.IdleState();
+    this._base = base;
+    this._pushFrame();
+};
 ResStack.prototype.addAlias = function addAlias (alias) {
-	var a = this._alias;
-	Object.keys(alias).forEach(function (k){
-		a[k] = alias[k];
-	});
+    this._state.addAlias(this, alias);
 };
 ResStack.prototype._makeFPath = function _makeFPath (name) {
-	return ((this._base) + "/" + (this._alias[name]));
+    return ((this._base) + "/" + (this._alias[name]));
 };
-ResStack.prototype.pushFrame = function pushFrame () {
-	var dst = {};
-	this._resource.push(dst);
-	return dst;
+ResStack.prototype._pushFrame = function _pushFrame () {
+    var dst = new ResLayer();
+    this._resource.push(dst);
+    return dst;
 };
-//! フレーム単位でリソースロード
-/*!
-	\param[in] res ["AliasName", ...]
+ResStack.prototype.state = function state () {
+    return this._state.state();
+};
+// フレーム単位でリソースロード
+/*
+    \param[in] res ["AliasName", ...]
 */
 ResStack.prototype.loadFrame = function loadFrame (res, cbComplete, cbError, bSame) {
-		var this$1 = this;
-		if ( bSame === void 0 ) bSame=false;
+        if ( bSame === void 0 ) bSame = false;
 
-	Assert$1(
-		res instanceof Array
-		&& cbComplete instanceof Function
-		&& cbError instanceof Function
-	);
-	Assert$1(!this._onLoading);
-	this._onLoading = true;
-
-	// 重複してるリソースはロード対象に入れない
-	{
-		var res2 = [];
-		for(var i=0 ; i<res.length ; i++) {
-			if(!this$1.getResource(res[i])) {
-				res2.push(res[i]);
-			}
-		}
-		res = res2;
-	}
-	var dst;
-	if(bSame) {
-		dst = this._resource.back();
-	} else {
-		dst = this.pushFrame();
-	}
-
-	var loaderL = [];
-	var infoL = [];
-	for(var i$1=0 ; i$1<res.length ; i$1++) {
-		var url = this$1._makeFPath(res[i$1]);
-		if(!url)
-			{ throw new Error(("unknown resource name \"" + (res[i$1]) + "\"")); }
-		var info = GetResourceInfo(url);
-		loaderL.push(info.makeLoader(url));
-		infoL.push(info);
-	}
-	var fb = function (){
-		Assert$1(this$1._onLoading);
-		this$1._onLoading = false;
-		var later = [];
-		var laterId = [];
-		for(var i=0 ; i<infoL.length ; i++) {
-			var r = infoL[i].makeResource(loaderL[i].result);
-			// MoreResourceが来たらまだ読み込みが終わってない
-			if(r instanceof MoreResource) {
-				later = later.concat.apply(later, r.array);
-				laterId.push(i);
-			} else
-				{ dst[res[i]] = r; }
-		}
-		if(!later.empty()) {
-			// 再度リソース読み込みをかける
-			this$1.loadFrame(later, function (){
-				for(var i=0 ; i<laterId.length ; i++) {
-					var id = laterId[i];
-					var r = infoL[id].makeResource(loaderL[id].result);
-					Assert$1(!(r instanceof MoreResource));
-					dst[res[id]] = r;
-				}
-				// すべてのリソース読み込み完了
-				cbComplete();
-			}, cbError, true);
-		} else {
-			// すべてのリソース読み込み完了
-			cbComplete();
-		}
-	};
-	ASyncGet(loaderL, 2,
-		fb,
-		function (){
-			this$1._onLoading = false;
-			cbError();
-		}
-	);
+    this._state.loadFrame(this, res, cbComplete, cbError, bSame);
 };
-prototypeAccessors$8.resourceLength.get = function () {
-	var diff = 0;
-	if(this._onLoading)
-		{ diff = -1; }
-	return this._resource.length + diff;
+// リソースレイヤの数
+ResStack.prototype.resourceLength = function resourceLength () {
+    return this._state.resourceLength(this);
 };
+ResStack.prototype._checkResourceSingle = function _checkResourceSingle (name) {
+    try {
+        this.getResource(name);
+    }
+    catch (e) {
+        return false;
+    }
+    return true;
+};
+// あるリソースを持っているかの確認(リスト対応)
 ResStack.prototype.checkResource = function checkResource (name) {
-		var this$1 = this;
+        var this$1 = this;
 
-	if(name instanceof Array) {
-		for(var i=0 ; i<name.length ; i++) {
-			if(!this$1.getResource(name[i]))
-				{ return false; }
-		}
-		return true;
-	}
-	return Boolean(this.getResource(name));
+    if (name instanceof Array) {
+        for (var i = 0; i < name.length; i++) {
+            if (!this$1._checkResourceSingle(name[i]))
+                { return false; }
+        }
+        return true;
+    }
+    return this._checkResourceSingle(name);
 };
 ResStack.prototype.getResource = function getResource (name) {
-	Assert$1(name);
-	var resA = this._resource;
-	for(var i=resA.length-1 ; i>=0 ; --i) {
-		var res = resA[i];
-		var r = res[name];
-		if(r)
-			{ return r; }
-	}
-	return null;
+    var resA = this._resource;
+    for (var i = resA.length - 1; i >= 0; --i) {
+        var res = resA[i];
+        var r = res.resource[name];
+        if (r)
+            { return r; }
+    }
+    throw new NoSuchResource(name);
 };
+// 外部で生成したリソースをレイヤーに格納
 ResStack.prototype.addResource = function addResource (key, val) {
-	// リソース名の重複は許容
-	if(this.getResource(key))
-		{ return; }
-	this._resource[this._resource.length-1][key] = val;
+    // リソース名の重複は許容
+    if (this.checkResource(key))
+        { return; }
+    this._resource[this._resource.length - 1].resource[key] = val;
 };
 ResStack.prototype.popFrame = function popFrame (n) {
-		if ( n === void 0 ) n = 1;
+        if ( n === void 0 ) n = 1;
 
-	Assert$1(!this._onLoading);
-	var resA = this._resource;
-	Assert$1(resA.length >= n);
-	// 明示的な開放処理
-	var loop = function () {
-		var res = resA.pop();
-		Object.keys(res).forEach(function (k){
-			res[k].discard();
-		});
-		--n;
-	};
-
-		while(n > 0) loop();
+    this._state.popFrame(this, n);
+};
+ResStack.prototype._forEach = function _forEach (n, cb) {
+    var r = this._resource[n].resource;
+    Object.keys(r).forEach(function (k) {
+        cb(r[k]);
+    });
+};
+// ------------ from Discardable ------------
+ResStack.prototype.discard = function discard () {
+    this._state.discard(this);
+};
+ResStack.prototype.isDiscarded = function isDiscarded () {
+    return this._df.isDiscarded();
 };
 
-Object.defineProperties( ResStack.prototype, prototypeAccessors$8 );
+var ResourceGenSrc = {};
+var ResourceGen = (function () {
+    return {
+        get: function (rp) {
+            var key = rp.key;
+            try {
+                return resource.getResource(key);
+            }
+            catch (e) {
+                if (!(e instanceof NoSuchResource))
+                    { throw e; }
+            }
+            var buff = ResourceGenSrc[rp.name](rp);
+            resource.addResource(key, buff);
+            return buff;
+        }
+    };
+})();
+
+function MakeCanvas(id) {
+    var canvas = document.createElement("canvas");
+    canvas.id = id;
+    canvas.textContent = "Canvas not supported.";
+    return canvas;
+}
+function MakeCanvasToBody(id) {
+    var c = MakeCanvas(id);
+    document.body.appendChild(c);
+    return c;
+}
+ResourceGenSrc.Canvas = function (rp) {
+    return new ResourceWrap(MakeCanvasToBody(rp.id));
+};
+var RPCanvas = function RPCanvas(id) {
+    this.id = id;
+};
+
+var prototypeAccessors$1 = { name: {},key: {} };
+prototypeAccessors$1.name.get = function () { return "Canvas"; };
+prototypeAccessors$1.key.get = function () { return ("Canvas_" + (this.id)); };
+
+Object.defineProperties( RPCanvas.prototype, prototypeAccessors$1 );
+
+var RPWebGLCtx = function RPWebGLCtx(canvasId) {
+    this.canvasId = canvasId;
+};
+
+var prototypeAccessors$2 = { name: {},key: {} };
+prototypeAccessors$2.name.get = function () { return "WebGL"; };
+prototypeAccessors$2.key.get = function () { return ("WebGL_" + (this.canvasId)); };
+
+Object.defineProperties( RPWebGLCtx.prototype, prototypeAccessors$2 );
+
+ResourceGenSrc.WebGL = function (rp) {
+    var canvas = ResourceGen.get(new RPCanvas(rp.canvasId));
+    var param = {
+        preserveDrawingBuffer: false
+    };
+    var webgl_text = [
+        "webgl",
+        "experimental-webgl",
+        "webkit-3d",
+        "moz-webgl",
+        "3d"
+    ];
+    for (var i = 0; i < webgl_text.length; i++) {
+        var gl = canvas.data.getContext(webgl_text[i], param);
+        if (gl)
+            { return new ResourceWrap(gl); }
+    }
+    throw Error("webgl not found");
+};
+
+var Engine = function Engine() {
+    this._doubling = 1;
+    this._sys3d = new SysUnif3D();
+    this._tech = {};
+    this._size = new Size(0, 0);
+    this._initGL();
+};
+Engine.prototype._onResized = function _onResized () {
+    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
+    var w = window.innerWidth, h = window.innerHeight;
+    this._size = new Size(w, h);
+    var dbl = this._doubling;
+    var assign;
+        (assign = [w / dbl, h / dbl], canvas.data.width = assign[0], canvas.data.height = assign[1]);
+    gl.viewport(0, 0, w / dbl, h / dbl);
+    canvas.data.style.cssText = "width:100%;height:100%";
+};
+Engine.prototype.sys3d = function sys3d () {
+    return this._sys3d;
+};
+Engine.prototype.size = function size () {
+    return this._size;
+};
+Engine.prototype._initGL = function _initGL () {
+        var this$1 = this;
+
+    Assert(!gl, "already initialized");
+    SetGL(ResourceGen.get(new RPWebGLCtx(Engine.CanvasName)).data);
+    if (!gl)
+        { throw new Error("WebGL not supported."); }
+    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
+    canvas.data.addEventListener("webglcontextlost", function (e) {
+        glres.onContextLost();
+    });
+    canvas.data.addEventListener("webglcontextrestored", function (e) {
+        glres.onContextRestored();
+    });
+    window.onresize = function () {
+        this$1._onResized();
+    };
+    this._onResized();
+    new GLConst(gl);
+};
+Engine.prototype.draw = function draw (cb) {
+        var this$1 = this;
+
+    var prog = this.technique().program;
+    this.sys3d().apply(prog);
+    var tc = 0;
+    var tex = [];
+    Object.keys(this._unif).forEach(function (k) {
+        var v = this$1._unif[k];
+        if (v instanceof GLTexture) {
+            gl.activeTexture(gl.TEXTURE0 + tc);
+            v.bind_loose();
+            prog.setUniform(k, tc++);
+            tex.push(v);
+        }
+        else {
+            prog.setUniform(k, v);
+        }
+    });
+    cb();
+    for (var i = 0; i < tex.length; i++)
+        { tex[i].unbind(); }
+};
+Engine.prototype.setUniform = function setUniform (name, value) {
+    this._unif[name] = value;
+};
+Engine.prototype.addTechnique = function addTechnique (sh) {
+        var this$1 = this;
+
+    var techL = sh.technique();
+    Object.keys(techL).forEach(function (k) {
+        var v = techL[k];
+        this$1._tech[k] = v;
+    });
+};
+Engine.prototype.setTechnique = function setTechnique (name) {
+    if (this._active)
+        { this._active.program.unbind(); }
+    this._active = this._tech[name];
+    this._active.valueset.apply();
+    this._active.program.bind();
+    this._unif = {};
+};
+Engine.prototype.technique = function technique () {
+    return this._active;
+};
+Engine.prototype.program = function program () {
+    return this.technique().program;
+};
+Engine.prototype.getScreenCoord = function getScreenCoord (pos) {
+    pos = pos.clone();
+    var s = this.size();
+    var w2 = s.width / 2, h2 = s.height / 2;
+    pos.x = pos.x / w2 - 1;
+    pos.y = -pos.y / h2 + 1;
+    return pos;
+};
+
+Engine.CanvasName = "maincanvas";
+
+var InputBuff = function InputBuff() {
+    this.key = {};
+    this.mkey = {};
+    this.wheelDelta = new Vec2(0);
+    this.pos = null;
+    this.dblClick = 0;
+};
+
+var InputFlag = function InputFlag() {
+    this._key = {};
+    this._mkey = {};
+    this._wheelDelta = new Vec2(0);
+    this._pos = new Vec2(0);
+    this._dblClick = false;
+    this._positionDelta = new Vec2(0);
+};
+InputFlag.prototype.update = function update (ns) {
+    var Proc = function (m0, m1) {
+        for (var k in m0) {
+            if (m0[k] === -1)
+                { delete m0[k]; }
+            else
+                { ++m0[k]; }
+        }
+        for (var k$1 in m1) {
+            if (m1[k$1] === true) {
+                if (!(m0[k$1] >= 1))
+                    { m0[k$1] = 1; }
+            }
+            else {
+                m0[k$1] = -1;
+            }
+        }
+    };
+    // Keyboard
+    Proc(this._key, ns.key);
+    // Mouse
+    Proc(this._mkey, ns.mkey);
+    // Wheel
+    this._wheelDelta = ns.wheelDelta;
+    // DoubleClick
+    this._dblClick = (ns.dblClick) ? true : false;
+    // PositionDelta
+    if (ns.pos)
+        { this._positionDelta = ns.pos.sub(this._pos); }
+    else
+        { this._positionDelta = new Vec2(0); }
+    // Pos
+    if (ns.pos)
+        { this._pos = ns.pos.clone(); }
+};
+InputFlag.prototype.isMKeyPressed = function isMKeyPressed (code) {
+    return this._mkey[code] === 1;
+};
+InputFlag.prototype.isMKeyPressing = function isMKeyPressing (code) {
+    return this._mkey[code] >= 1;
+};
+InputFlag.prototype.isMKeyClicked = function isMKeyClicked (code) {
+    return this._mkey[code] === -1;
+};
+InputFlag.prototype.isKeyPressed = function isKeyPressed (code) {
+    return this._key[code] === 1;
+};
+InputFlag.prototype.isKeyPressing = function isKeyPressing (code) {
+    return this._key[code] >= 1;
+};
+InputFlag.prototype.isKeyClicked = function isKeyClicked (code) {
+    return this._key[code] === -1;
+};
+InputFlag.prototype.position = function position () {
+    return this._pos;
+};
+InputFlag.prototype.doubleClicked = function doubleClicked () {
+    return this._dblClick;
+};
+InputFlag.prototype.wheelDelta = function wheelDelta () {
+    return this._wheelDelta;
+};
+InputFlag.prototype.positionDelta = function positionDelta () {
+    return this._positionDelta;
+};
+
+var InputMgr = function InputMgr() {
+    var this$1 = this;
+
+    this._cur = new InputBuff();
+    this._prev = new InputBuff();
+    this._switchBuff();
+    this._flag = new InputFlag();
+    this._bDiscard = false;
+    this._events = {
+        mousedown: function (e) {
+            this$1._cur.mkey[e.button] = true;
+        },
+        mouseup: function (e) {
+            this$1._cur.mkey[e.button] = false;
+        },
+        mousemove: function (e) {
+            this$1._cur.pos = new Vec2(e.pageX, e.pageY);
+        },
+        keydown: function (e) {
+            this$1._cur.key[e.keyCode] = true;
+        },
+        keyup: function (e) {
+            this$1._cur.key[e.keyCode] = false;
+        },
+        wheel: function (e) {
+            this$1._cur.wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
+        },
+        dblclick: function (e) {
+            this$1._cur.dblClick = 0x01;
+        },
+        touchstart: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var me = e.changedTouches[0];
+            var p = new Vec2(me.pageX, me.pageY);
+            this$1._prev.pos = this$1._cur.pos = p;
+            this$1._cur.mkey[0] = true;
+            return false;
+        },
+        touchmove: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var me = e.changedTouches[0];
+            this$1._cur.pos = new Vec2(me.pageX, me.pageY);
+            return false;
+        },
+        touchend: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this$1._cur.mkey[0] = false;
+            return false;
+        },
+        touchcancel: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this$1._cur.mkey[0] = false;
+            return false;
+        }
+    };
+    this._registerEvent();
+};
+InputMgr.prototype.lockPointer = function lockPointer (elem) {
+    var api = [
+        "requestPointerLock",
+        "webkitRequestPointerLock",
+        "mozRequestPointerLock"
+    ];
+    var len = api.length;
+    for (var i = 0; i < len; i++) {
+        if (elem[api[i]]) {
+            elem[api[i]]();
+            return;
+        }
+    }
+    Assert(false, "pointer lock API not found");
+};
+InputMgr.prototype.unlockPointer = function unlockPointer () {
+    var api = [
+        "exitPointerLock",
+        "webkitExitPointerLock",
+        "mozExitPointerLock"
+    ];
+    var len = api.length;
+    for (var i = 0; i < len; i++) {
+        if (document[api[i]]) {
+            document[api[i]]();
+            return;
+        }
+    }
+    Assert(false, "pointer lock API not found");
+};
+InputMgr.prototype._registerEvent = function _registerEvent () {
+        var this$1 = this;
+
+    var param = { capture: true, passive: false };
+    for (var k in this$1._events) {
+        document.addEventListener(k, this$1._events[k], param);
+    }
+};
+InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
+        var this$1 = this;
+
+    for (var k in this$1._events) {
+        document.removeEventListener(k, this$1._events[k]);
+    }
+};
+InputMgr.prototype._switchBuff = function _switchBuff () {
+    this._prev = this._cur;
+    this._cur = new InputBuff();
+};
+InputMgr.prototype.update = function update () {
+    this._flag.update(this._cur);
+    this._switchBuff();
+};
+InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) {
+    return this._flag.isMKeyPressed(code);
+};
+InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) {
+    return this._flag.isMKeyPressing(code);
+};
+InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) {
+    return this._flag.isMKeyClicked(code);
+};
+InputMgr.prototype.isKeyPressed = function isKeyPressed (code) {
+    return this._flag.isKeyPressed(code);
+};
+InputMgr.prototype.isKeyPressing = function isKeyPressing (code) {
+    return this._flag.isKeyPressing(code);
+};
+InputMgr.prototype.isKeyClicked = function isKeyClicked (code) {
+    return this._flag.isKeyClicked(code);
+};
+InputMgr.prototype.positionDelta = function positionDelta () {
+    return this._flag.positionDelta();
+};
+InputMgr.prototype.position = function position () {
+    return this._flag.position();
+};
+InputMgr.prototype.doubleClicked = function doubleClicked () {
+    return this._flag.doubleClicked();
+};
+InputMgr.prototype.wheelDelta = function wheelDelta () {
+    return this._flag.wheelDelta();
+};
+// ---------------- from Discardable ----------------
+InputMgr.prototype.isDiscarded = function isDiscarded () {
+    return this._bDiscard;
+};
+InputMgr.prototype.discard = function discard () {
+    this._unregisterEvent();
+};
+
+var GObject = (function (BaseObject$$1) {
+    function GObject(priority) {
+        if ( priority === void 0 ) priority = 0;
+
+        BaseObject$$1.call(this);
+        this.priority = priority;
+    }
+
+    if ( BaseObject$$1 ) GObject.__proto__ = BaseObject$$1;
+    GObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
+    GObject.prototype.constructor = GObject;
+    GObject.prototype.onUpdate = function onUpdate (dt) {
+        return this.alive();
+    };
+    GObject.prototype.onDown = function onDown () { };
+    GObject.prototype.onUp = function onUp () { };
+    GObject.prototype.onConnected = function onConnected (g) { };
+
+    return GObject;
+}(BaseObject));
+
+var State = function State () {};
+
+State.prototype.onEnter = function onEnter (self, prev) { };
+State.prototype.onExit = function onExit (self, next) { };
+State.prototype.onUpdate = function onUpdate (self, dt) { };
+State.prototype.onDown = function onDown (self) { };
+State.prototype.onUp = function onUp (self) { };
+
+var BeginState = new State();
+var EndState = new State();
+
+var FSMachine = (function (GObject$$1) {
+    function FSMachine(p, state) {
+        GObject$$1.call(this, p);
+        this._state = state;
+        this._nextState = null;
+        state.onEnter(this, BeginState);
+    }
+
+    if ( GObject$$1 ) FSMachine.__proto__ = GObject$$1;
+    FSMachine.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    FSMachine.prototype.constructor = FSMachine;
+    FSMachine.prototype._doSwitchState = function _doSwitchState () {
+        var this$1 = this;
+
+        for (;;) {
+            var ns = this$1._nextState;
+            if (!ns)
+                { break; }
+            this$1._nextState = null;
+            var old = this$1._state;
+            old.onExit(this$1, ns);
+            this$1._state = ns;
+            ns.onEnter(this$1, old);
+        }
+    };
+    FSMachine.prototype.setState = function setState (st) {
+        Assert(!this._nextState);
+        this._nextState = st;
+    };
+    FSMachine.prototype.onUpdate = function onUpdate (dt) {
+        if (this.alive()) {
+            this._state.onUpdate(this, dt);
+            this._doSwitchState();
+        }
+        return this.alive();
+    };
+    FSMachine.prototype.onDown = function onDown () {
+        this._state.onDown(this);
+    };
+    FSMachine.prototype.onUp = function onUp () {
+        this._state.onUp(this);
+    };
+    FSMachine.prototype.discard = function discard () {
+        if (this.alive()) {
+            GObject$$1.prototype.discard.call(this);
+            this.setState(EndState);
+            this._doSwitchState();
+            return true;
+        }
+        return false;
+    };
+
+    return FSMachine;
+}(GObject));
+
+var Group = function Group() {
+    this._group = [];
+    this._add = null;
+    this._remove = null;
+};
+Group.prototype.group = function group () { return this._group; };
+Group.prototype._doAdd = function _doAdd (cbAdd) {
+        var this$1 = this;
+
+    var addL = this._add;
+    if (addL) {
+        addL.forEach(function (obj) {
+            cbAdd(obj, this$1);
+            this$1._group.push(obj);
+        });
+        this._add = null;
+        return true;
+    }
+    return false;
+};
+Group.prototype._removeSingle = function _removeSingle (obj) {
+    // 線形探索
+    var g = this._group;
+    var len = g.length;
+    for (var i = 0; i < len; i++) {
+        if (g[i] === obj)
+            { g.splice(i, 1); }
+    }
+};
+Group.prototype._doRemove = function _doRemove () {
+        var this$1 = this;
+
+    var remL = this._remove;
+    if (remL) {
+        var len = remL.length;
+        for (var i = 0; i < len; i++)
+            { this$1._removeSingle(remL[i]); }
+        this._remove = null;
+        return true;
+    }
+    return false;
+};
+Group.prototype._sort = function _sort (cbSort) {
+    this._group.sort(cbSort);
+};
+Group.prototype.doAddRemove = function doAddRemove (cbAdd) {
+    return this._doAdd(cbAdd) || this._doRemove();
+};
+Group.prototype.proc = function proc (cbAdd, cbSort, bRefr) {
+    if (this.doAddRemove(cbAdd) || bRefr) {
+        if (cbSort)
+            { this._sort(cbSort); }
+    }
+};
+Group.prototype.add = function add (obj) {
+    if (!this._add)
+        { this._add = []; }
+    this._add.push(obj);
+};
+Group.prototype.remove = function remove (obj) {
+    if (!this._remove)
+        { this._remove = []; }
+    this._remove.push(obj);
+};
+
+var UpdGroup = (function (GObject$$1) {
+    function UpdGroup(p) {
+        GObject$$1.call(this, p);
+        this.group = new Group();
+    }
+
+    if ( GObject$$1 ) UpdGroup.__proto__ = GObject$$1;
+    UpdGroup.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    UpdGroup.prototype.constructor = UpdGroup;
+    UpdGroup.prototype._doAddRemove = function _doAddRemove () {
+        var cbAdd = function (obj, g) {
+            obj.onConnected(g);
+        };
+        var cbSort = function (a, b) {
+            if (a.priority > b.priority)
+                { return 1; }
+            else if (a.priority === b.priority)
+                { return 0; }
+            return -1;
+        };
+        this.group.proc(cbAdd, cbSort);
+    };
+    UpdGroup.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        this._doAddRemove();
+        var g = this.group.group();
+        for (var i = 0; i < g.length; i++) {
+            if (!g[i].onUpdate(dt))
+                { this$1.group.remove(g[i]); }
+        }
+        this._doAddRemove();
+        return true;
+    };
+
+    return UpdGroup;
+}(GObject));
+
+var DrawGroup = (function (DObject$$1) {
+    function DrawGroup() {
+        DObject$$1.apply(this, arguments);
+        this.group = new Group();
+        this._bRefr = true;
+    }
+
+    if ( DObject$$1 ) DrawGroup.__proto__ = DObject$$1;
+    DrawGroup.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    DrawGroup.prototype.constructor = DrawGroup;
+    DrawGroup.prototype.setSortAlgorithm = function setSortAlgorithm (a) {
+        this._sortAlg = a;
+        this._bRefr = true;
+    };
+    DrawGroup.prototype._proc = function _proc () {
+        var this$1 = this;
+
+        var cbAdd = function (obj, g) { };
+        var cbSort;
+        if (this._sortAlg) {
+            cbSort = function (a, b) {
+                return this$1._sortAlg(a.drawtag, b.drawtag);
+            };
+        }
+        this.group.proc(cbAdd, cbSort, this._bRefr);
+        this._bRefr = false;
+    };
+    DrawGroup.prototype.onDraw = function onDraw () {
+        this._proc();
+        var g = this.group.group();
+        for (var i = 0; i < g.length; i++) {
+            g[i].onDraw();
+        }
+        this._proc();
+    };
+
+    return DrawGroup;
+}(DObject));
+
+var Scene = (function (FSMachine$$1) {
+    function Scene() {
+        FSMachine$$1.apply(this, arguments);
+        this.updateTarget = new UpdGroup(0);
+        this.drawTarget = new DrawGroup();
+    }
+
+    if ( FSMachine$$1 ) Scene.__proto__ = FSMachine$$1;
+    Scene.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
+    Scene.prototype.constructor = Scene;
+    Scene.prototype.asUpdateGroup = function asUpdateGroup () {
+        Assert(this.updateTarget instanceof UpdGroup);
+        return this.updateTarget;
+    };
+    Scene.prototype.asDrawGroup = function asDrawGroup () {
+        Assert(this.drawTarget instanceof DrawGroup);
+        return this.drawTarget;
+    };
+    Scene.prototype.onUpdate = function onUpdate (dt) {
+        FSMachine$$1.prototype.onUpdate.call(this, dt);
+        this.updateTarget.onUpdate(dt);
+        return true;
+    };
+    Scene.prototype.onDraw = function onDraw () {
+        this.drawTarget.onDraw();
+    };
+
+    return Scene;
+}(FSMachine));
+
+function OutputError(where, msg) {
+    console.log(("Error in " + where + ": " + msg));
+}
+
+var SceneMgrState;
+(function (SceneMgrState) {
+    SceneMgrState[SceneMgrState["Idle"] = 0] = "Idle";
+    SceneMgrState[SceneMgrState["Draw"] = 1] = "Draw";
+    SceneMgrState[SceneMgrState["Proc"] = 2] = "Proc";
+})(SceneMgrState || (SceneMgrState = {}));
+var SceneMgr = (function (GObject$$1) {
+    function SceneMgr(firstScene) {
+        GObject$$1.call(this);
+        this._scene = [];
+        this._nextScene = null;
+        this._nPop = 0;
+        this._state = SceneMgrState.Idle;
+        this.push(firstScene, false);
+        firstScene.onUp();
+        this._proceed();
+    }
+
+    if ( GObject$$1 ) SceneMgr.__proto__ = GObject$$1;
+    SceneMgr.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    SceneMgr.prototype.constructor = SceneMgr;
+    SceneMgr.prototype.push = function push (scene, bPop) {
+        Assert(scene instanceof Scene);
+        // 描画メソッドでのシーン変更は禁止
+        Assert(this._state !== SceneMgrState.Draw);
+        // 一度に2つ以上のシーンを積むのは禁止
+        Assert(!this._nextScene);
+        // popした後に積むのも禁止
+        Assert(this._nPop === 0);
+        this._nextScene = scene;
+        this._nPop = bPop ? 1 : 0;
+    };
+    SceneMgr.prototype.pop = function pop (n) {
+        if ( n === void 0 ) n = 1;
+
+        // 描画メソッドでのシーン変更は禁止
+        Assert(this._state !== SceneMgrState.Draw);
+        // pushした後にpopはNG
+        Assert(!this._nextScene);
+        Assert(this._nPop === 0);
+        this._nPop = n;
+    };
+    SceneMgr.prototype._proceed = function _proceed () {
+        var this$1 = this;
+
+        Assert(this._state === SceneMgrState.Idle);
+        this._state = SceneMgrState.Proc;
+        var b = false;
+        while (this._nPop > 0) {
+            --this$1._nPop;
+            b = true;
+            var t = this$1._scene.pop();
+            t.discard();
+            if (this$1._scene.length === 0) {
+                this$1._nPop = 0;
+                break;
+            }
+            this$1.top().onDown();
+        }
+        var ns = this._nextScene;
+        if (ns) {
+            this._nextScene = null;
+            this._scene.push(ns);
+            ns.onUp();
+            b = true;
+        }
+        this._state = SceneMgrState.Idle;
+        return b;
+    };
+    SceneMgr.prototype.top = function top () {
+        return this._scene[this._scene.length - 1];
+    };
+    SceneMgr.prototype.length = function length () {
+        return this._scene.length;
+    };
+    SceneMgr.prototype._empty = function _empty () {
+        return this.length() === 0;
+    };
+    SceneMgr.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        for (;;) {
+            if (this$1._empty())
+                { return false; }
+            try {
+                this$1.top().onUpdate(dt);
+            }
+            catch (e) {
+                OutputError("scenemgr::onupdate()", e.message);
+            }
+            if (!this$1._proceed())
+                { break; }
+        }
+        return !this._empty();
+    };
+    SceneMgr.prototype.onDraw = function onDraw () {
+        Assert(this._state === SceneMgrState.Idle);
+        this._state = SceneMgrState.Draw;
+        try {
+            this.top().onDraw();
+        }
+        catch (e) {
+            OutputError("scenemgr::ondraw()", e.message);
+        }
+        this._state = SceneMgrState.Idle;
+    };
+
+    return SceneMgr;
+}(GObject));
+
+var Loop = function Loop() {
+    this._targetFps = 60;
+    this._resetCounter();
+};
+Loop.prototype._resetCounter = function _resetCounter () {
+    this._timerId = null;
+    this._currentFps = 0;
+    this._accum = 0;
+    this._accumFps = 0;
+};
+Loop.prototype._resetTime = function _resetTime (now) {
+    this._prevTime = now;
+    this._prevFpsTime = now;
+    this._beginTime = now;
+};
+Loop.prototype.running = function running () {
+    return this._timerId !== null;
+};
+Loop.prototype.targetFps = function targetFps () {
+    return this._targetFps;
+};
+Loop.prototype.accum = function accum () {
+    return this._accum;
+};
+Loop.prototype.currentFps = function currentFps () {
+    return this._currentFps;
+};
+Loop._CalcFPSArray = function _CalcFPSArray (fps) {
+    var gcd = TM$1.GCD(1000, fps);
+    var div0 = 1000 / gcd, div1 = fps / gcd;
+    var df = Math.floor(div0 / div1);
+    var tmp = [];
+    for (var i = 0; i < div1; i++) {
+        tmp.push(df);
+    }
+    var dc = df * div1;
+    for (var i$1 = 0; i$1 < (div0 - dc); i$1++)
+        { ++tmp[i$1]; }
+    return tmp;
+};
+Loop.prototype.start = function start (targetFps, cb) {
+    this.stop();
+    this._targetFps = targetFps;
+    this._resetTime(new Date().getTime());
+    var fps_array = Loop._CalcFPSArray(targetFps);
+    var fps_ptr = 0;
+    var self = this;
+    (function Tmp() {
+        self._timerId = setTimeout(Tmp, fps_array[fps_ptr]);
+        fps_ptr = (++fps_ptr) % fps_array.length;
+        var now = new Date().getTime();
+        if (now - self._prevFpsTime >= 1000) {
+            self._currentFps = self._accumFps;
+            self._accumFps = 0;
+            self._prevFpsTime = now;
+            // while(self._prevFpsTime <= now-1000)
+            // 	self._prevFpsTime += 1000;
+        }
+        ++self._accum;
+        ++self._accumFps;
+        cb((now - self._prevTime) / 1000);
+        self._prevTime = now;
+    })();
+};
+Loop.prototype.stop = function stop () {
+    if (this._timerId) {
+        clearTimeout(this._timerId);
+        this._resetCounter();
+    }
+};
+
+var GLResourceSet = (function (GLResourceFlag$$1) {
+    function GLResourceSet() {
+        GLResourceFlag$$1.apply(this, arguments);
+        this._set = new Set();
+    }
+
+    if ( GLResourceFlag$$1 ) GLResourceSet.__proto__ = GLResourceFlag$$1;
+    GLResourceSet.prototype = Object.create( GLResourceFlag$$1 && GLResourceFlag$$1.prototype );
+    GLResourceSet.prototype.constructor = GLResourceSet;
+    GLResourceSet.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceFlag$$1.prototype.onContextLost.call(this, function () {
+            this$1._set.forEach(function (r) {
+                r.onContextLost();
+            });
+        });
+    };
+    GLResourceSet.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceFlag$$1.prototype.onContextRestored.call(this, function () {
+            this$1._set.forEach(function (r) {
+                r.onContextRestored();
+            });
+        });
+    };
+    GLResourceSet.prototype.add = function add (r) {
+        this._set.add(r);
+        if (!gl.isContextLost())
+            { r.onContextRestored(); }
+    };
+    GLResourceSet.prototype.remove = function remove (r) {
+        this._set.delete(r);
+    };
+
+    return GLResourceSet;
+}(GLResourceFlag));
 
 var St = (function (State$$1) {
-	function St () {
-		State$$1.apply(this, arguments);
-	}if ( State$$1 ) St.__proto__ = State$$1;
-	St.prototype = Object.create( State$$1 && State$$1.prototype );
-	St.prototype.constructor = St;
+    function St () {
+        State$$1.apply(this, arguments);
+    }if ( State$$1 ) St.__proto__ = State$$1;
+    St.prototype = Object.create( State$$1 && State$$1.prototype );
+    St.prototype.constructor = St;
 
-	
+    
 
-	return St;
+    return St;
 }(State));
 var LoadingScene = (function (Scene$$1) {
-	function LoadingScene(res, nextScene) {
-		Scene$$1.call(this, 0, new St());
-		window.resource.loadFrame(
-			res,
-			function (){
-				try {
-					window.scene.push(nextScene, true);
-				} catch (e) {
-					alert(e);
-				}
-			},
-			function (){
-				alert("ERROR");
-			}
-		);
-	}
+    function LoadingScene(res, nextScene) {
+        Scene$$1.call(this, 0, new St());
+        resource.loadFrame(res, function () {
+            try {
+                scene.push(nextScene, true);
+            }
+            catch (e) {
+                alert(e);
+            }
+        }, function () {
+            alert("ERROR");
+        });
+    }
 
-	if ( Scene$$1 ) LoadingScene.__proto__ = Scene$$1;
-	LoadingScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
-	LoadingScene.prototype.constructor = LoadingScene;
+    if ( Scene$$1 ) LoadingScene.__proto__ = Scene$$1;
+    LoadingScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
+    LoadingScene.prototype.constructor = LoadingScene;
 
-	return LoadingScene;
+    return LoadingScene;
 }(Scene));
 function _MainLoop(alias, base, cbMakeScene) {
-	window.resource = new ResStack(base);
-	window.resource.addAlias(alias);
-	window.engine = new Engine();
-	window.input = new InputMgr();
-	window.scene = new SceneMgr(cbMakeScene());
+    SetResource(new ResStack(base));
+    resource.addAlias(alias);
+    SetEngine(new Engine());
+    SetInput(new InputMgr());
+    SetScene(new SceneMgr(cbMakeScene()));
+    SetGLRes(new GLResourceSet());
+    glres.onContextRestored();
 }
 
 function MainLoop_RF(alias, base, cbMakeScene) {
-	_MainLoop(alias, base, cbMakeScene);
-
-	RequestAnimationFrame(function Loop$$1() {
-		RequestAnimationFrame(Loop$$1);
-		window.input.update();
-		window.scene.onUpdate(1/60);
-		window.scene.onDraw();
-	});
+    _MainLoop(alias, base, cbMakeScene);
+    RequestAnimationFrame(function Loop$$1() {
+        RequestAnimationFrame(Loop$$1);
+        input.update();
+        scene.onUpdate(1 / 60);
+        scene.onDraw();
+    });
 }
 
-var St_Idle = (function (State$$1) {
-	function St_Idle () {
-		State$$1.apply(this, arguments);
-	}
+var StIdle = (function (State$$1) {
+    function StIdle () {
+        State$$1.apply(this, arguments);
+    }
 
-	if ( State$$1 ) St_Idle.__proto__ = State$$1;
-	St_Idle.prototype = Object.create( State$$1 && State$$1.prototype );
-	St_Idle.prototype.constructor = St_Idle;
+    if ( State$$1 ) StIdle.__proto__ = State$$1;
+    StIdle.prototype = Object.create( State$$1 && State$$1.prototype );
+    StIdle.prototype.constructor = StIdle;
 
-	St_Idle.prototype.onUpdate = function onUpdate (self, dt) {
-		if(input.isMKeyPressed(0)) {
-			self.setState(new St_Look());
-		} else {
-			var c = self._camera;
-			if(input.isKeyPressing(65)) {
-				c.pos.x -= dt*5;
-			}
-			if(input.isKeyPressing(68)) {
-				c.pos.x += dt*5;
-			}
-			if(input.isKeyPressing(87)) {
-				c.pos.y += dt*5;
-			}
-			if(input.isKeyPressing(83)) {
-				c.pos.y -= dt*5;
-			}
-		}
-	};
+    StIdle.prototype.onUpdate = function onUpdate (self, dt) {
+        if (input.isMKeyPressed(0)) {
+            self.setState(new StLook());
+        }
+        else {
+            var c = self.camera;
+            var dx = 0, dy = 0;
+            // A = 65
+            if (input.isKeyPressing(65)) {
+                dx = -1;
+                // D = 68
+            }
+            else if (input.isKeyPressing(68)) {
+                dx = 1;
+            }
+            // W = 87
+            if (input.isKeyPressing(87)) {
+                dy = 1;
+                // S = 83
+            }
+            else if (input.isKeyPressing(83)) {
+                dy = -1;
+            }
+            var r = c.rot.right();
+            c.pos.addSelf(r.mul(dx * dt * self._speed));
+            var u = c.rot.dir();
+            c.pos.addSelf(u.mul(dy * dt * self._speed));
+        }
+    };
 
-	return St_Idle;
+    return StIdle;
 }(State));
-var St_Look = (function (State$$1) {
-	function St_Look () {
-		State$$1.apply(this, arguments);
-	}
+var StLook = (function (State$$1) {
+    function StLook () {
+        State$$1.apply(this, arguments);
+    }
 
-	if ( State$$1 ) St_Look.__proto__ = State$$1;
-	St_Look.prototype = Object.create( State$$1 && State$$1.prototype );
-	St_Look.prototype.constructor = St_Look;
+    if ( State$$1 ) StLook.__proto__ = State$$1;
+    StLook.prototype = Object.create( State$$1 && State$$1.prototype );
+    StLook.prototype.constructor = StLook;
 
-	St_Look.prototype.onUpdate = function onUpdate (self/*, dt*/) {
-		if(!input.isMKeyPressing(0)) {
-			self.setState(new St_Idle());
-		} else {
-			var d = input.positionDelta;
-			self._yaw += d.x*0.005;
-			self._pitch -= d.y*0.005;
+    StLook.prototype.onUpdate = function onUpdate (self, dt) {
+        if (!input.isMKeyPressing(0)) {
+            self.setState(new StIdle());
+        }
+        else {
+            var d = input.positionDelta();
+            self._yaw += d.x * self._rotSpeed;
+            self._pitch -= d.y * self._rotSpeed;
+            var pi = Math.PI;
+            self._pitch = Saturation(self._pitch, -(pi / 2 - 0.01), (pi / 2 - 0.01));
+            var c = self.camera;
+            c.rot = Quat.RotationYPR(self._yaw, self._pitch, 0);
+            c.rot.normalizeSelf();
+        }
+    };
 
-			var pi = Math.PI;
-			self._pitch = Saturation(self._pitch, -(pi/2-0.01), (pi/2-0.01));
-
-			var c = self._camera;
-			c.rot = Quat.RotationYPR(self._yaw, self._pitch, 0);
-			c.rot.normalizeSelf();
-		}
-	};
-
-	return St_Look;
+    return StLook;
 }(State));
-
-/* global engine input */
 var FPSCamera = (function (FSMachine$$1) {
-	function FPSCamera() {
-		FSMachine$$1.call(this, 0, new St_Idle());
-		this._yaw = this._pitch = 0;
+    function FPSCamera() {
+        FSMachine$$1.call(this, 0, new StIdle());
+        this._yaw = this._pitch = 0;
+        this._speed = 3;
+        this._rotSpeed = 0.003;
+        var c = new Camera3D();
+        c.fov = TM$1.Deg2rad(90);
+        var s = engine.size();
+        c.aspect = s.width / s.height;
+        c.nearZ = 0.01;
+        c.farZ = 200;
+        c.pos = new Vec3(0, 0, -1);
+        this.camera = c;
+    }
 
-		var c = new Camera3D();
-		c.fov = TM.Deg2rad(90);
-		c.aspect = engine.width / engine.height;
-		c.nearZ = 0.01;
-		c.farZ = 200;
-		c.pos = new Vec3(0,0,-1);
-		c.rot = Quat.Identity();
+    if ( FSMachine$$1 ) FPSCamera.__proto__ = FSMachine$$1;
+    FPSCamera.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
+    FPSCamera.prototype.constructor = FPSCamera;
 
-		this._camera = c;
-		engine.sys3d.camera = c;
-	}
-
-	if ( FSMachine$$1 ) FPSCamera.__proto__ = FSMachine$$1;
-	FPSCamera.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
-	FPSCamera.prototype.constructor = FPSCamera;
-
-	return FPSCamera;
+    return FPSCamera;
 }(FSMachine));
 
-/* global gl */
-var GLBuffer = (function (Resource$$1) {
-	function GLBuffer() {
-		Resource$$1.call(this);
-		this._clean();
-		this._id = gl.createBuffer();
-	}
+var GLBufferInfo = function GLBufferInfo(usage, typeinfo, 
+    // 頂点の個数
+    nElem, 
+    // 要素何個分で頂点一つ分か
+    dim, 
+    // バックアップ用のデータ
+    backup) {
+    this.usage = usage;
+    this.typeinfo = typeinfo;
+    this.nElem = nElem;
+    this.dim = dim;
+    this.backup = backup;
+};
+var GLBuffer = function GLBuffer() {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._bBind = false;
+    glres.add(this);
+};
+GLBuffer.prototype.id = function id () {
+    return this._id;
+};
+GLBuffer.prototype.usage = function usage () {
+    return this._info.usage;
+};
+GLBuffer.prototype.typeinfo = function typeinfo () {
+    return this._info.typeinfo;
+};
+GLBuffer.prototype.nElem = function nElem () {
+    return this._info.nElem;
+};
+GLBuffer.prototype.dim = function dim () {
+    return this._info.dim;
+};
+GLBuffer.prototype._typeId = function _typeId () {
+    return GLConst.BufferTypeC.convert(this.typeId());
+};
+GLBuffer.prototype._typeQueryId = function _typeQueryId () {
+    return GLConst.BufferQueryC.convert(this.typeQueryId());
+};
+GLBuffer.prototype._usage = function _usage () {
+    return GLConst.DrawTypeC.convert(this.usage());
+};
+GLBuffer.prototype.allocate = function allocate (fmt, nElem, dim, usage, bRestore) {
+        var this$1 = this;
 
-	if ( Resource$$1 ) GLBuffer.__proto__ = Resource$$1;
-	GLBuffer.prototype = Object.create( Resource$$1 && Resource$$1.prototype );
-	GLBuffer.prototype.constructor = GLBuffer;
+    var t = GLConst.GLTypeInfo[GLConst.DataFormatC.convert(fmt)];
+    Assert(Boolean(t));
+    var bytelen = nElem * dim * t.bytesize;
+    this._info = new GLBufferInfo(usage, t, nElem, dim, bRestore ? new ArrayBuffer(bytelen) : undefined);
+    this.proc(function () {
+        gl.bufferData(this$1._typeId(), bytelen, this$1._usage());
+    });
+};
+GLBuffer.prototype._setDataRaw = function _setDataRaw (data, info, nElem, dim, usage, bRestore) {
+        var this$1 = this;
 
-	var prototypeAccessors = { id: {},usage: {},type: {},typesize: {},length: {},dim: {} };
-	GLBuffer.prototype._clean = function _clean () {
-		this._id = null;
-		this._bBind = false;
-		this._usage = null;
-		this._type = null;
-		this._typesize = null;
-		this._length = null;
-	};
-	prototypeAccessors.id.get = function () { return this._id; };
-	prototypeAccessors.usage.get = function () { return this._usage; };
-	prototypeAccessors.type.get = function () { return this._type; };
-	prototypeAccessors.typesize.get = function () { return this._typesize; };
-	//! 頂点の個数
-	prototypeAccessors.length.get = function () { return this._length; };
-	//! 要素何個分で頂点一つ分か
-	prototypeAccessors.dim.get = function () { return this._dim; };
-	GLBuffer.prototype.bind = function bind () {
-		Assert$1(this.id, "already discarded");
-		Assert$1(!this._bBind, "already binded");
-		gl.bindBuffer(this.typeId, this.id);
-		this._bBind = true;
-	};
-	GLBuffer.prototype.unbind = function unbind () {
-		Assert$1(this._bBind, "not binded yet");
-		gl.bindBuffer(this.typeId, null);
-		this._bBind = false;
-	};
-	GLBuffer.prototype.setDataRaw = function setDataRaw (data, dim, usage) {
-		this._usage = usage;
-		this._type = glc.Cnv_Type2GLType[data.constructor.name];
-		this._typesize = glc.GLTypeInfo[this._type].bytesize;
-		this._dim = dim;
-		this._length = data.length / dim;
+    var restoreData;
+    if (bRestore) {
+        restoreData = data.slice(0);
+    }
+    this._info = new GLBufferInfo(usage, info, nElem, dim, restoreData);
+    this.proc(function () {
+        gl.bufferData(this$1._typeId(), data, this$1._usage());
+    });
+};
+GLBuffer.prototype.setDataRaw = function setDataRaw (data, dim, usage, bRestore) {
+    var t = GLConst.Type2GLType[data.constructor.name];
+    this._setDataRaw(data.buffer, t, data.length / dim, dim, usage, bRestore);
+};
+GLBuffer.prototype.setData = function setData (data, usage, bRestore) {
+    var ar = VectorToArray.apply(void 0, data);
+    if (ar) {
+        var dim = data[0].dim();
+        this.setDataRaw(ar, dim, usage, bRestore);
+    }
+};
+GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
+        var this$1 = this;
 
-		this.bind();
-		gl.bufferData(this.typeId, data, usage);
-		this.unbind();
-	};
-	GLBuffer.prototype.setData = function setData (data, usage) {
-		var ar = VectorToArray.apply(void 0, data);
-		if(ar)
-			{ this.setDataRaw(ar, data[0].dim, usage); }
-	};
-	GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
-		this.bind();
-		gl.bufferSubData(this.typeId, this._typesize*offset_elem, data);
-		this.unbind();
-	};
-	GLBuffer.prototype.discard = function discard () {
-		Assert$1(!this._bBind, "still binding somewhere");
-		Assert$1(this.id, "already discarded");
-		gl.deleteBuffer(this.id);
-		this._clean();
-	};
+    this.proc(function () {
+        gl.bufferSubData(this$1._typeId(), this$1._info.typeinfo.bytesize * offset_elem, data);
+    });
+};
+// --------- from Bindable ---------
+GLBuffer.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(!this._bBind, "already binded");
+    gl.bindBuffer(this._typeId(), this.id());
+    this._bBind = true;
+};
+GLBuffer.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
 
-	Object.defineProperties( GLBuffer.prototype, prototypeAccessors );
+    Assert(this._bBind, "not binded yet");
+    gl.bindBuffer(this._typeId(), id);
+    this._bBind = false;
+};
+GLBuffer.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(this._typeQueryId());
+    this.bind();
+    cb();
+    this.unbind(prev);
+};
+// --------- from Discardable ---------
+GLBuffer.prototype.discard = function discard () {
+    Assert(!this._bBind, "still binding somewhere");
+    this.onContextLost();
+    this._rf.discard();
+};
+GLBuffer.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+// --------- from GLContext ---------
+GLBuffer.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
 
-	return GLBuffer;
-}(Resource));
+    this._rf.onContextLost(function () {
+        gl.deleteBuffer(this$1.id());
+        this$1._id = null;
+    });
+};
+GLBuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
 
-/* global gl */
+    this._rf.onContextRestored(function () {
+        this$1._id = gl.createBuffer();
+        if (this$1._info) {
+            // 必要ならデータを復元
+            var bd = this$1._info.backup;
+            if (bd) {
+                this$1._setDataRaw(bd, this$1.typeinfo(), this$1.nElem(), this$1.dim(), this$1.usage(), true);
+            }
+        }
+    });
+};
+GLBuffer.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+
 var GLVBuffer = (function (GLBuffer$$1) {
-	function GLVBuffer () {
-		GLBuffer$$1.apply(this, arguments);
-	}
+    function GLVBuffer () {
+        GLBuffer$$1.apply(this, arguments);
+    }
 
-	if ( GLBuffer$$1 ) GLVBuffer.__proto__ = GLBuffer$$1;
-	GLVBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
-	GLVBuffer.prototype.constructor = GLVBuffer;
+    if ( GLBuffer$$1 ) GLVBuffer.__proto__ = GLBuffer$$1;
+    GLVBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
+    GLVBuffer.prototype.constructor = GLVBuffer;
 
-	var prototypeAccessors = { typeId: {} };
+    GLVBuffer.prototype.typeId = function typeId () {
+        return BufferType.Vertex;
+    };
+    GLVBuffer.prototype.typeQueryId = function typeQueryId () {
+        return BufferQuery.Vertex;
+    };
 
-	prototypeAccessors.typeId.get = function () {
-		return gl.ARRAY_BUFFER;
-	};
-
-	Object.defineProperties( GLVBuffer.prototype, prototypeAccessors );
-
-	return GLVBuffer;
+    return GLVBuffer;
 }(GLBuffer));
 
-var Drawable = (function (GObject$$1) {
-	function Drawable () {
-		GObject$$1.apply(this, arguments);
-	}
-
-	if ( GObject$$1 ) Drawable.__proto__ = GObject$$1;
-	Drawable.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-	Drawable.prototype.constructor = Drawable;
-
-	var prototypeAccessors = { drawtag: {} };
-
-	prototypeAccessors.drawtag.get = function () {
-		return null;
-	};
-
-	Object.defineProperties( Drawable.prototype, prototypeAccessors );
-
-	return Drawable;
-}(GObject));
-
 function Rand01() {
-	return (Math.random()-0.5) * 2;
+    return (Math.random() - 0.5) * 2;
 }
+var Points = function Points() {
+    this.position = [];
+    this.color = [];
+};
 var Alg = function Alg(n) {
-	this._n = n;
+    this._nP = n;
+    this._veloc = [];
 };
 Alg.prototype.initialize = function initialize () {
-	var vpos = [];
-	var veloc = [];
-	for(var i=0 ; i<this._n ; i++) {
-		vpos[i] = new Vec3(Rand01(), -1, Rand01());
-		veloc[i] = new Vec3(Rand01(), 0.1, Rand01()).normalizeSelf();
-	}
-	this._veloc = veloc;
-	return vpos;
+    var ret = new Points();
+    var vpos = ret.position;
+    var vcol = ret.color;
+    var veloc = this._veloc;
+    for (var i = 0; i < this._nP; i++) {
+        vpos[i] = new Vec3(Rand01(), -1, Rand01());
+        veloc[i] = new Vec3(Rand01(), 0.1, Rand01()).normalizeSelf();
+        vcol[i] = new Vec3(Math.random(), Math.random(), Math.random());
+    }
+    return ret;
 };
-Alg.prototype.advance = function advance (vpos, dt) {
-	var veloc = this._veloc;
-	var len = this._n;
-	for(var i=0 ; i<len ; i++) {
-		vpos[i].addSelf(veloc[i].mul(dt));
-		var dir = vpos[i].minus();
-		dir.mulSelf(dt);
-		veloc[i] = veloc[i].add(dir).normalize();
-	}
+Alg.prototype.advance = function advance (points, dt) {
+    var veloc = this._veloc;
+    var len = veloc.length;
+    for (var i = 0; i < len; i++) {
+        points.position[i].addSelf(veloc[i].mul(dt));
+        var dir = points.position[i].minus();
+        dir.mulSelf(dt);
+        veloc[i] = veloc[i].add(dir).normalize();
+    }
 };
-/* global gl engine */
-/*!
-	[shader requirements]
-	attribute {
-		vec3		a_position;
-	}
-	uniform {
-		float		u_alpha;
-		mat4		u_mTrans,
-					u_mWorld;
-		vec3		u_eyePos;
-		sampler2D	u_texture;
-	}
-*/
 var PSprite = function PSprite(alg) {
-	this._alg = alg;
-	this._vpos = alg.initialize();
-	var vb = new GLVBuffer();
-	vb.setData(this._vpos, glc.E_Drawtype.Dynamic);
-	this._geom = {
-		vb: {
-			a_position: vb
-		}
-	};
+    this._alg = alg;
+    this._points = alg.initialize();
+    var vbc = new GLVBuffer();
+    vbc.setData(this._points.color, DrawType.Dynamic, true);
+    var vb = new GLVBuffer();
+    vb.setData(this._points.position, DrawType.Dynamic, true);
+    this._geom = {
+        vbuffer: {
+            a_position: vb,
+            a_color: vbc
+        }
+    };
 };
 PSprite.prototype.advance = function advance (dt) {
-	this._alg.advance(this._vpos, dt);
-	this._geom.vb.a_position.setData(this._vpos, glc.E_Drawtype.Dynamic);
+    this._alg.advance(this._points, dt);
+    this._geom.vbuffer.a_position.setData(this._points.position, DrawType.Dynamic, true);
+    this._geom.vbuffer.a_color.setData(this._points.color, DrawType.Dynamic, true);
 };
 PSprite.prototype.draw = function draw (alpha) {
-		var this$1 = this;
+        var this$1 = this;
 
-	engine.technique = "psprite";
-	if(this.texture)
-		{ engine.setUniform("u_texture", this.texture); }
-	engine.sys3d.worldMatrix = Mat44.Identity();
-	engine.setUniform("u_alpha", alpha);
-	engine.draw(function (){
-		DrawWithGeom(this$1._geom, gl.POINTS);
-	});
+    engine.setTechnique("psprite");
+    if (this.texture)
+        { engine.setUniform("u_texture", this.texture); }
+    engine.sys3d().worldMatrix = Mat44.Identity();
+    engine.setUniform("u_alpha", alpha);
+    engine.draw(function () { DrawWithGeom(this$1._geom, gl.POINTS); });
 };
-/* global resource */
-var PSpriteDraw = (function (Drawable$$1) {
-	function PSpriteDraw() {
-		Drawable$$1.call(this);
-		this._psprite = new PSprite(new Alg(2000));
-		this._psprite.texture = resource.getResource("sphere");
-		this.alpha = 1;
-	}
+var PSpriteDraw = (function (DObject$$1) {
+    function PSpriteDraw(n) {
+        DObject$$1.call(this);
+        this._psprite = new PSprite(new Alg(n));
+        var tex = resource.getResource("sphere");
+        tex.setLinear(true, true, 0);
+        this._psprite.texture = tex;
+        this.alpha = 1;
+    }
 
-	if ( Drawable$$1 ) PSpriteDraw.__proto__ = Drawable$$1;
-	PSpriteDraw.prototype = Object.create( Drawable$$1 && Drawable$$1.prototype );
-	PSpriteDraw.prototype.constructor = PSpriteDraw;
-	PSpriteDraw.prototype.advance = function advance (dt) {
-		this._psprite.advance(dt/2);
-	};
-	PSpriteDraw.prototype.onUpdate = function onUpdate () {
-		if(Drawable$$1.prototype.onUpdate.call(this)) {
-			this._psprite.draw(this.alpha);
-			return true;
-		}
-		return false;
-	};
+    if ( DObject$$1 ) PSpriteDraw.__proto__ = DObject$$1;
+    PSpriteDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    PSpriteDraw.prototype.constructor = PSpriteDraw;
+    PSpriteDraw.prototype.advance = function advance (dt) {
+        this._psprite.advance(dt / 2);
+    };
+    PSpriteDraw.prototype.onDraw = function onDraw () {
+        this._psprite.draw(this.alpha);
+    };
 
-	return PSpriteDraw;
-}(Drawable));
+    return PSpriteDraw;
+}(DObject));
 
-var Font = (function () {
-	function anonymous(family, size, weight, italic) {
-		var assign;
-	(assign = [family, size, weight, italic], this.family = assign[0], this.size = assign[1], this.weight = assign[2], this.italic = assign[3]);
-	}
+var XHRLoader = function XHRLoader(url, type) {
+    var this$1 = this;
 
-	var prototypeAccessors = { fontstr: {} };
-	prototypeAccessors.fontstr.get = function () {
-		var italic = this.italic ? "italic" : "";
-		return (italic + " " + (this.weight) + " " + (this.size) + " " + (this.family));
-	};
-
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
-
-	return anonymous;
-}());
-
-ResourceGenSrc.FontCtx = function(rp) {
-	var c = ResourceGen.get(new RP_Canvas(rp.canvasId));
-	// 後で変える
-	c.width = c.height = 512;
-	var ctx = c.getContext("2d");
-	ctx.textAlign = "left";
-	ctx.textBaseline = "top";
-	ctx.fillStyle = "white";
-	return ctx;
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = type;
+    xhr.onload = function () {
+        var xhr = this$1._xhr;
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                this$1._status = "complete";
+                this$1._cbCompleted();
+            }
+            else {
+                this$1._status = "error";
+                this$1._errormsg = xhr.statusText;
+                this$1._cbError();
+            }
+        }
+    };
+    xhr.onerror = function () {
+        this$1._errormsg = "unknown error";
+        this$1._cbError();
+    };
+    this._status = "idle";
+    this._xhr = xhr;
 };
-var RP_FontCtx = (function (RP_WebGLCtx$$1) {
-	function anonymous () {
-		RP_WebGLCtx$$1.apply(this, arguments);
-	}
+XHRLoader.prototype.begin = function begin (cbCompleted, cbError) {
+    this._cbCompleted = cbCompleted;
+    this._cbError = cbError;
+    this._status = "loading";
+    this._xhr.send(null);
+};
+XHRLoader.prototype.abort = function abort () {
+    this._status = "abort";
+    this._xhr.abort();
+};
+XHRLoader.prototype.errormsg = function errormsg () {
+    return this._errormsg;
+};
+XHRLoader.prototype.status = function status () {
+    return this._status;
+};
+XHRLoader.prototype.result = function result () {
+    return this._xhr.response;
+};
 
-	if ( RP_WebGLCtx$$1 ) anonymous.__proto__ = RP_WebGLCtx$$1;
-	anonymous.prototype = Object.create( RP_WebGLCtx$$1 && RP_WebGLCtx$$1.prototype );
-	anonymous.prototype.constructor = anonymous;
+ResourceExtToType.def = "JSON";
+ResourceInfo.JSON = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new ResourceWrap(src);
+    }
+};
 
-	var prototypeAccessors = { name: {},key: {} };
+var ShaderError = (function (Error) {
+    function ShaderError(id) {
+        Error.call(this, "\n"
+            + PaddingString(32, "-")
+            + AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
+            + PaddingString(32, "-")
+            + "\n"
+            + gl.getShaderInfoLog(id)
+            + "\n");
+    }
 
-	prototypeAccessors.name.get = function () { return "FontCtx"; };
-	prototypeAccessors.key.get = function () { return ("FontCtx_" + (this._canvasId)); };
+    if ( Error ) ShaderError.__proto__ = Error;
+    ShaderError.prototype = Object.create( Error && Error.prototype );
+    ShaderError.prototype.constructor = ShaderError;
 
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ShaderError";
+    };
 
-	return anonymous;
-}(RP_WebGLCtx));
+    Object.defineProperties( ShaderError.prototype, prototypeAccessors );
+
+    return ShaderError;
+}(Error));
+var GLShader = function GLShader(src) {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._source = src;
+    glres.add(this);
+};
+GLShader.prototype.id = function id () {
+    return this._id;
+};
+// --------------- from GLContext ---------------
+GLShader.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+    this._rf.onContextLost(function () {
+        gl.deleteShader(this$1._id);
+        this$1._id = null;
+    });
+};
+GLShader.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+    this._rf.onContextRestored(function () {
+        // シェーダーを読み込んでコンパイル
+        var id = gl.createShader(GLConst.ShaderTypeC.convert(this$1.typeId()));
+        gl.shaderSource(id, this$1._source);
+        gl.compileShader(id);
+        if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
+            this$1._id = id;
+        }
+        else {
+            throw new ShaderError(id);
+        }
+    });
+};
+GLShader.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+// --------------- from Discardable ---------------
+GLShader.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+GLShader.prototype.discard = function discard () {
+    this.onContextLost();
+    this._rf.discard();
+};
+
+var GLVShader = (function (GLShader$$1) {
+    function GLVShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
+    GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLVShader.prototype.constructor = GLVShader;
+
+    GLVShader.prototype.typeId = function typeId () {
+        return ShaderType.Vertex;
+    };
+
+    return GLVShader;
+}(GLShader));
+
+var GLFShader = (function (GLShader$$1) {
+    function GLFShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
+    GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLFShader.prototype.constructor = GLFShader;
+
+    GLFShader.prototype.typeId = function typeId () {
+        return ShaderType.Fragment;
+    };
+
+    return GLFShader;
+}(GLShader));
+
+ResourceExtToType.vsh = "VertexShader";
+ResourceExtToType.fsh = "FragmentShader";
+ResourceInfo.VertexShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLVShader(src);
+    }
+};
+ResourceInfo.FragmentShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLFShader(src);
+    }
+};
+
+var ProgramError = (function (Error) {
+    function ProgramError(id) {
+        Error.call(this, gl.getProgramInfoLog(id));
+    }
+
+    if ( Error ) ProgramError.__proto__ = Error;
+    ProgramError.prototype = Object.create( Error && Error.prototype );
+    ProgramError.prototype.constructor = ProgramError;
+
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ProgramError";
+    };
+
+    Object.defineProperties( ProgramError.prototype, prototypeAccessors );
+
+    return ProgramError;
+}(Error));
+var GLProgram = function GLProgram(vs, fs) {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._bBind = false;
+    this._vs = vs;
+    this._fs = fs;
+    glres.add(this);
+};
+GLProgram.prototype.id = function id () {
+    return this._id;
+};
+GLProgram.prototype.hasUniform = function hasUniform (name) {
+    return this._uniform[name] !== undefined;
+};
+/*!
+    \param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
+*/
+GLProgram.prototype.setUniform = function setUniform (name, value) {
+    var u = this._uniform[name];
+    if (u) {
+        var f = u.type.uniformF;
+        if (value instanceof Array) {
+            // [matrix...] or [vector...]
+            var ar = value;
+            f.call(gl, u.index, VMToArray(ar));
+        }
+        else {
+            // matrix or vector or float or int
+            if (IsMatrix(value))
+                { f.call(gl, u.index, false, value.value); }
+            else if (IsVector(value))
+                { f.call(gl, u.index, value.value); }
+            else
+                { f.call(gl, u.index, value); }
+        }
+    }
+};
+/*!
+    \param[in] data	[vector...] or GLVBuffer
+*/
+GLProgram.prototype.setVStream = function setVStream (name, data) {
+    var a = this._attribute[name];
+    if (a) {
+        if (data instanceof Array) {
+            // [vector...]
+            a.type.vertexF(a.index, VectorToArray.apply(void 0, data));
+        }
+        else {
+            var data2 = data;
+            // GLVBuffer
+            data2.proc(function () {
+                gl.enableVertexAttribArray(a.index);
+                var info = data2.typeinfo();
+                gl.vertexAttribPointer(a.index, data2.dim(), info.id, false, info.bytesize * data2.dim(), 0);
+            });
+        }
+    }
+};
+// ------------- from Bindable -------------
+GLProgram.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(!this._bBind, "already binded");
+    gl.useProgram(this.id());
+    this._bBind = true;
+};
+GLProgram.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+    Assert(this._bBind, "not binding anywhere");
+    gl.useProgram(id);
+    this._bBind = false;
+};
+GLProgram.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(gl.CURRENT_PROGRAM);
+    this.bind();
+    cb();
+    this.unbind(prev);
+};
+// ------------- from Discardable -------------
+GLProgram.prototype.discard = function discard () {
+    Assert(!this._bBind);
+    this.onContextLost();
+    this._rf.discard();
+};
+GLProgram.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+// ------------- from GLContext -------------
+GLProgram.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+    this._rf.onContextLost(function () {
+        gl.deleteProgram(this$1.id());
+        this$1._id = null;
+    });
+};
+GLProgram.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+    this._rf.onContextRestored(function () {
+        if (this$1._vs.contextLost())
+            { this$1._vs.onContextRestored(); }
+        if (this$1._fs.contextLost())
+            { this$1._fs.onContextRestored(); }
+        var prog = gl.createProgram();
+        gl.attachShader(prog, this$1._vs.id());
+        gl.attachShader(prog, this$1._fs.id());
+        gl.linkProgram(prog);
+        if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+            this$1._id = prog;
+        }
+        else
+            { throw new ProgramError(prog); }
+        {
+            var attr = {};
+            var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
+            for (var i = 0; i < nAtt; i++) {
+                var a = gl.getActiveAttrib(prog, i);
+                var typ = GLConst.GLSLTypeInfo[a.type];
+                attr[a.name] = {
+                    index: gl.getAttribLocation(prog, a.name),
+                    size: a.size,
+                    type: typ
+                };
+                Assert(attr[a.name].type !== undefined);
+            }
+            this$1._attribute = attr;
+        }
+        {
+            var unif = {};
+            var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+            for (var i$1 = 0; i$1 < nUnif; i$1++) {
+                var u = gl.getActiveUniform(prog, i$1);
+                unif[u.name] = {
+                    index: gl.getUniformLocation(prog, u.name),
+                    size: u.size,
+                    type: GLConst.GLSLTypeInfo[u.type]
+                };
+                Assert(unif[u.name].type !== undefined);
+            }
+            this$1._uniform = unif;
+        }
+    });
+};
+GLProgram.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+
+function ToLowercaseKeys(ar) {
+    var ret = {};
+    Object.keys(ar).forEach(function (k) {
+        var val = ar[k];
+        if (typeof val === "string")
+            { val = val.toLowerCase(); }
+        else if (val instanceof Array) {
+            for (var i = 0; i < val.length; i++) {
+                if (typeof val[i] === "string")
+                    { val[i] = val[i].toLowerCase(); }
+            }
+        }
+        ret[k.toLowerCase()] = val;
+    });
+    return ret;
+}
+var GLValueSet = function GLValueSet () {};
+
+GLValueSet.FromJSON = function FromJSON (js) {
+    var ret = new GLValueSet();
+    var bs = js.boolset;
+    var bsf = {};
+    for (var i = 0; i < bs.length; i++) {
+        bsf[bs[i]] = true;
+    }
+    ret._boolset = ToLowercaseKeys(bsf);
+    ret._valueset = ToLowercaseKeys(js.valueset);
+    return ret;
+};
+GLValueSet.prototype.enable = function enable (name) {
+    this._boolset[name] = true;
+};
+GLValueSet.prototype.disable = function disable (name) {
+    delete this._boolset[name];
+};
+GLValueSet.prototype.apply = function apply () {
+        var this$1 = this;
+
+    // boolset
+    for (var i = 0; i < BoolString.length; i++) {
+        var key = BoolString[i];
+        var func = (this$1._boolset[key] === true) ? gl.enable : gl.disable;
+        func.call(gl, GLConst.BoolSettingC.convert(i + 34359738368 /* Num */));
+    }
+    // valueset
+    for (var k in this$1._valueset) {
+        var args = this$1._valueset[k];
+        var func$1 = GLConst.ValueSetting[k];
+        if (args instanceof Array)
+            { func$1.call(gl, args[0], args[1], args[2], args[3]); }
+        else
+            { func$1.call(gl, args); }
+    }
+};
+
+var Technique = (function (ResourceWrap$$1) {
+    function Technique(src) {
+        ResourceWrap$$1.call(this, null);
+        // 必要なリソースが揃っているかのチェック
+        var later = this._checkResource(src);
+        if (!later.empty())
+            { throw new (Function.prototype.bind.apply( MoreResource, [ null ].concat( later) )); }
+        // 実際のローディング
+        this._loadResource(src);
+    }
+
+    if ( ResourceWrap$$1 ) Technique.__proto__ = ResourceWrap$$1;
+    Technique.prototype = Object.create( ResourceWrap$$1 && ResourceWrap$$1.prototype );
+    Technique.prototype.constructor = Technique;
+    Technique.prototype._checkResource = function _checkResource (src) {
+        var later = [];
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            var chk = function (key) {
+                if (!resource.checkResource(key))
+                    { later.push(key); }
+            };
+            chk(v.valueset);
+            chk(v.vshader);
+            chk(v.fshader);
+        });
+        return later;
+    };
+    Technique.prototype._loadResource = function _loadResource (src) {
+        var tech = {};
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            tech[k] = {
+                valueset: GLValueSet.FromJSON(resource.getResource(v.valueset).data),
+                program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
+            };
+        });
+        this._tech = tech;
+    };
+
+    Technique.prototype.technique = function technique () {
+        return this._tech;
+    };
+
+    return Technique;
+}(ResourceWrap));
+
+ResourceExtToType.prog = "Technique";
+ResourceInfo.Technique = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new Technique(src);
+    }
+};
+
+var ImageLoader = function ImageLoader(url) {
+    var this$1 = this;
+
+    var img = new Image();
+    img.onload = function () {
+        this$1._timerId = null;
+        this$1._status = "complete";
+        this$1._cbCompleted();
+    };
+    this._url = url;
+    this._img = img;
+    this._status = "idle";
+};
+ImageLoader.prototype.begin = function begin (cbCompleted, cbError) {
+        var this$1 = this;
+
+    this._timerId = setTimeout(function () {
+        if (this$1._timerId) {
+            // timeout
+            this$1._status = "error";
+            this$1._errormsg = "connection timedout";
+            this$1._cbError();
+        }
+    }, 5000);
+    this._cbCompleted = cbCompleted;
+    this._cbError = cbError;
+    this._img.src = this._url;
+    this._status = "loading";
+};
+ImageLoader.prototype.abort = function abort () {
+    // 非対応
+    this._status = "abort";
+};
+ImageLoader.prototype.errormsg = function errormsg () {
+    return this._errormsg;
+};
+ImageLoader.prototype.status = function status () {
+    return this._status;
+};
+ImageLoader.prototype.result = function result () {
+    return this._img;
+};
+
+var GLTexture2D = (function (GLTexture$$1) {
+    function GLTexture2D () {
+        GLTexture$$1.apply(this, arguments);
+    }
+
+    if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
+    GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
+    GLTexture2D.prototype.constructor = GLTexture2D;
+
+    GLTexture2D.prototype.typeId = function typeId () {
+        return TextureType.Texture2D;
+    };
+    GLTexture2D.prototype.typeQueryId = function typeQueryId () {
+        return TextureQuery.Texture2D;
+    };
+
+    return GLTexture2D;
+}(GLTexture));
+
+ResourceExtToType.png = "Image";
+ResourceExtToType.jpg = "Image";
+ResourceInfo.Image = {
+    makeLoader: function (url) {
+        return new ImageLoader(url);
+    },
+    makeResource: function (src) {
+        var tex = new GLTexture2D();
+        tex.setImage(InterFormat.RGBA, InterFormat.RGBA, TexDataFormat.UB, src);
+        tex.genMipmap();
+        return tex;
+    }
+};
 
 var Range = function Range(from, to) {
-	this.from = from;
-	this.to = to;
+    this.from = from;
+    this.to = to;
 };
-
-var prototypeAccessors$11 = { width: {} };
-prototypeAccessors$11.width.get = function () {
-	return this.to - this.from;
+Range.prototype.width = function width () {
+    return this.to - this.from;
 };
 Range.prototype.move = function move (ofs) {
-	this.from += ofs;
-	this.to += ofs;
+    this.from += ofs;
+    this.to += ofs;
 };
 
-Object.defineProperties( Range.prototype, prototypeAccessors$11 );
-
-ResourceGenSrc.FontHeight = function(rp) {
-	var c = ResourceGen.get(new RP_FontCtx("fontcanvas"));
-	c.font = rp.font.fontstr;
-
-	var canvas = c.canvas;
-	var cw = canvas.width,
-		ch = canvas.height;
-	c.fillStyle = "black";
-	c.fillRect(0,0, cw, ch);
-	c.fillStyle = "white";
-	c.fillText("あいうえおAEglq", 0, 0);
-	var fw = c.measureText("Eg").width;
-	var pixels = c.getImageData(0, 0, fw, ch);
-
-	var top, bottom;
-	// Find top border
-	Top: for(var i=0 ; i<ch ; i++) {
-		var idx = pixels.width*i * 4;
-		for(var j=0 ; j<pixels.width ; j++) {
-			if(pixels.data[idx+j*4] !== 0) {
-				// found top border
-				top = i;
-				break Top;
-			}
-		}
-	}
-	// Find bottom border
-	Bottom: for(var i$1=ch-1 ; i$1>=0 ; i$1--) {
-		var idx$1 = pixels.width*i$1 * 4;
-		for(var j$1=0 ; j$1<pixels.width ; j$1++) {
-			if(pixels.data[idx$1+j$1*4] !== 0) {
-				// found bottom border
-				bottom = i$1;
-				break Bottom;
-			}
-		}
-	}
-	return new Range(top, bottom+1);
+var LinearTimer = function LinearTimer(init, end) {
+    this.cur = 0;
+    this.range = new Range(0, 0);
+    this.range.from = init;
+    this.range.to = end;
 };
-var RP_FontHeight = (function (ResourceParam$$1) {
-	function anonymous(font) {
-		ResourceParam$$1.call(this);
-		this.font = font;
-	}
-
-	if ( ResourceParam$$1 ) anonymous.__proto__ = ResourceParam$$1;
-	anonymous.prototype = Object.create( ResourceParam$$1 && ResourceParam$$1.prototype );
-	anonymous.prototype.constructor = anonymous;
-
-	var prototypeAccessors = { name: {},key: {} };
-	prototypeAccessors.name.get = function () { return "FontHeight"; };
-	prototypeAccessors.key.get = function () {
-		return ("FontHeight_" + (this.font.fontstr));
-	};
-
-	Object.defineProperties( anonymous.prototype, prototypeAccessors );
-
-	return anonymous;
-}(ResourceParam));
-
-var Rect = function Rect(l,t,r,b) {
-	this.left = l;
-	this.top = t;
-	this.right = r;
-	this.bottom = b;
+LinearTimer.prototype.reset = function reset () {
+    this.cur = this.range.from;
+};
+LinearTimer.prototype.get = function get () {
+    return this.cur;
+};
+LinearTimer.prototype.advance = function advance (dt) {
+    if (this.cur >= this.range.to) {
+        return true;
+    }
+    this.cur += dt;
+    return false;
 };
 
-var prototypeAccessors$13 = { lt: {},rb: {},width: {},height: {} };
-prototypeAccessors$13.lt.get = function () {
-	return new Vec2(this.left, this.top);
+var TextDraw = (function (DObject$$1) {
+    function TextDraw(text, delay) {
+        DObject$$1.call(this);
+        this._text = text;
+        this.timer = new LinearTimer(0, text.length() + delay);
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+        this.delay = delay;
+    }
+
+    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
+    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextDraw.prototype.constructor = TextDraw;
+    TextDraw.prototype.advance = function advance (dt) {
+        return this.timer.advance(dt);
+    };
+    TextDraw.prototype.onDraw = function onDraw () {
+        engine.setTechnique("text");
+        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
+    };
+
+    return TextDraw;
+}(DObject));
+
+var Font = (function () {
+    function anonymous(family, size, weight, italic) {
+        this.family = family;
+        this.size = size;
+        this.weight = weight;
+        this.italic = italic;
+    }
+    anonymous.prototype.fontstr = function fontstr () {
+        var italic = this.italic ? "italic" : "";
+        return (italic + " " + (this.weight) + " " + (this.size) + " " + (this.family));
+    };
+
+    return anonymous;
+}());
+
+ResourceGenSrc.FontCtx = function (rp) {
+    var c = ResourceGen.get(new RPCanvas(rp.canvasId));
+    // 後で変える
+    c.data.width = c.data.height = 512;
+    var ctx = c.data.getContext("2d");
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "white";
+    return new ResourceWrap(ctx);
 };
-prototypeAccessors$13.rb.get = function () {
-	return new Vec2(this.right, this.bottom);
+var RP_FontCtx = (function (RPWebGLCtx$$1) {
+    function anonymous () {
+        RPWebGLCtx$$1.apply(this, arguments);
+    }
+
+    if ( RPWebGLCtx$$1 ) anonymous.__proto__ = RPWebGLCtx$$1;
+    anonymous.prototype = Object.create( RPWebGLCtx$$1 && RPWebGLCtx$$1.prototype );
+    anonymous.prototype.constructor = anonymous;
+
+    var prototypeAccessors = { name: {},key: {} };
+
+    prototypeAccessors.name.get = function () { return "FontCtx"; };
+    prototypeAccessors.key.get = function () { return ("FontCtx_" + (this.canvasId)); };
+
+    Object.defineProperties( anonymous.prototype, prototypeAccessors );
+
+    return anonymous;
+}(RPWebGLCtx));
+
+ResourceGenSrc.FontHeight = function (rp) {
+    var c = ResourceGen.get(new RP_FontCtx("fontcanvas"));
+    c.data.font = rp.font.fontstr();
+    var canvas = c.data.canvas;
+    var cw = canvas.width, ch = canvas.height;
+    c.data.fillStyle = "black";
+    c.data.fillRect(0, 0, cw, ch);
+    c.data.fillStyle = "white";
+    c.data.fillText("あいうえおAEglq", 0, 0);
+    var fw = c.data.measureText("Eg").width;
+    var pixels = c.data.getImageData(0, 0, fw, ch);
+    var top = 0, bottom = ch;
+    // Find top border
+    Top: for (var i = 0; i < ch; i++) {
+        var idx = pixels.width * i * 4;
+        for (var j = 0; j < pixels.width; j++) {
+            if (pixels.data[idx + j * 4] !== 0) {
+                // found top border
+                top = i;
+                break Top;
+            }
+        }
+    }
+    // Find bottom border
+    Bottom: for (var i$1 = ch - 1; i$1 >= 0; i$1--) {
+        var idx$1 = pixels.width * i$1 * 4;
+        for (var j$1 = 0; j$1 < pixels.width; j$1++) {
+            if (pixels.data[idx$1 + j$1 * 4] !== 0) {
+                // found bottom border
+                bottom = i$1;
+                break Bottom;
+            }
+        }
+    }
+    return new ResourceWrap(new Range(top, bottom + 1));
 };
-prototypeAccessors$13.width.get = function () {
-	return this.right - this.left;
+var RPFontHeight = function RPFontHeight(font) {
+    this.font = font;
 };
-prototypeAccessors$13.height.get = function () {
-	return this.bottom- this.top;
+
+var prototypeAccessors$3 = { name: {},key: {} };
+prototypeAccessors$3.name.get = function () { return "FontHeight"; };
+prototypeAccessors$3.key.get = function () {
+    return ("FontHeight_" + (this.font.fontstr()));
+};
+
+Object.defineProperties( RPFontHeight.prototype, prototypeAccessors$3 );
+
+var Rect = function Rect(left, top, right, bottom) {
+    this.left = left;
+    this.top = top;
+    this.right = right;
+    this.bottom = bottom;
+};
+Rect.prototype.lt = function lt () {
+    return new Vec2(this.left, this.top);
+};
+Rect.prototype.rb = function rb () {
+    return new Vec2(this.right, this.bottom);
+};
+Rect.prototype.width = function width () {
+    return this.right - this.left;
+};
+Rect.prototype.height = function height () {
+    return this.bottom - this.top;
 };
 Rect.prototype.move = function move (ofs) {
-	this.left += ofs.x;
-	this.right += ofs.x;
-	this.top += ofs.y;
-	this.bottom += ofs.y;
+    this.left += ofs.x;
+    this.right += ofs.x;
+    this.top += ofs.y;
+    this.bottom += ofs.y;
 };
 
-Object.defineProperties( Rect.prototype, prototypeAccessors$13 );
-
-/* global gl */ //! フォントテクスチャのうちの一行分
+// フォントテクスチャのうちの一行分
 var FontLane = function FontLane(w) {
-	this._width = w;
-	this._cur = 0;
-	// CharCode -> Range(X)
-	this._map = {};
+    this._width = w;
+    this._cur = 0;
+    this._map = {};
 };
 FontLane.prototype.get = function get (code, str, ctx, fw, fh, baseY, tex) {
-	// 既に計算してあればそれを返す
-	{
-		var ret = this._map[code];
-		if(ret)
-			{ return ret; }
-	}
-	// これ以上スペースが無ければnull
-	if(this._cur + fw > this._width)
-		{ return null; }
-
-	ctx.fillStyle = "black";
-	ctx.fillRect(0, 0, fw, fh.to);
-	ctx.fillStyle = "white";
-	ctx.fillText(str, 0, 0);
-
-	var dat = ctx.getImageData(0, fh.from, fw, fh.width);
-	var data = dat.data;
-	var u8data = new Uint8Array(fw * fh.width);
-	for(var i=0 ; i<u8data.length ; i++) {
-		u8data[i] = data[i*4];
-	}
-	gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-	tex.setSubData(
-		0,
-		new Rect(
-			this._cur,
-			baseY,
-			this._cur+fw,
-			baseY+fh.width
-		),
-		glc.E_InterFormat.Alpha,
-		glc.E_TexDataFormat.UB,
-		u8data
-	);
-	// キャッシュに格納
-	var range = new Range(this._cur, this._cur+fw);
-	this._map[code] = range;
-	this._cur += fw;
-	return range;
+    // 既に計算してあればそれを返す
+    {
+        var ret = this._map[code];
+        if (ret)
+            { return ret; }
+    }
+    // これ以上スペースが無ければnull
+    if (this._cur + fw > this._width)
+        { return null; }
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, fw, fh.to);
+    ctx.fillStyle = "white";
+    ctx.fillText(str, 0, 0);
+    var dat = ctx.getImageData(0, fh.from, fw, fh.width());
+    var data = dat.data;
+    var u8data = new Uint8Array(fw * fh.width());
+    for (var i = 0; i < u8data.length; i++) {
+        u8data[i] = data[i * 4];
+    }
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    tex.setSubData(new Rect(this._cur, baseY, this._cur + fw, baseY + fh.width()), InterFormat.Alpha, TexDataFormat.UB, u8data);
+    // キャッシュに格納
+    var range = new Range(this._cur, this._cur + fw);
+    this._map[code] = range;
+    this._cur += fw;
+    return range;
 };
-//! フォントテクスチャ一枚分(Lane複数)
+var FontCacheItem = function FontCacheItem(uvrect, width, height) {
+    this.uvrect = uvrect;
+    this.width = width;
+    this.height = height;
+};
+// フォントテクスチャ一枚分(Lane複数)
 var FontPlane = function FontPlane(w, h, laneH) {
-	var this$1 = this;
+    var this$1 = this;
 
-	Assert$1(h >= laneH);
-	this._laneH = laneH;
-	// ビットマップを保持するテクスチャ
-	var tex = new GLTexture2D();
-	tex.setData(0, glc.E_InterFormat.Alpha, w, h,
-		glc.E_InterFormat.Alpha, glc.E_TexDataFormat.UB, null);
-	tex.setLinear(true, true, 0);
-	this._tex = tex;
-	// hをlaneHの高さで埋められるだけのサイズ(FontLane)配列
-	this._lane = [];
-	var nLane = Math.floor(h/laneH);
-	for(var i=0 ; i<nLane ; i++) {
-		this$1._lane.push(new FontLane(w));
-	}
-	// CharCode -> {UVRect, width, heightR}
-	this._map = {};
+    Assert(h >= laneH);
+    this._laneH = laneH;
+    // ビットマップを保持するテクスチャ
+    var tex = new GLTexture2D();
+    tex.setData(InterFormat.Alpha, w, h, InterFormat.Alpha, TexDataFormat.UB, undefined);
+    tex.setLinear(true, true, 0);
+    this.texture = tex;
+    // hをlaneHの高さで埋められるだけのサイズ(FontLane)配列
+    this._lane = [];
+    var nLane = Math.floor(h / laneH);
+    for (var i = 0; i < nLane; i++) {
+        this$1._lane.push(new FontLane(w));
+    }
+    this._map = {};
 };
-
-var prototypeAccessors$12 = { texture: {} };
-prototypeAccessors$12.texture.get = function () { return this._tex; };
 FontPlane.prototype.get = function get (code, str, ctx, fw, fh) {
-		var this$1 = this;
+        var this$1 = this;
 
-	// 既に計算してあればそれを返す
-	{
-		var ret = this._map[code];
-		if(ret)
-			{ return ret; }
-	}
-	var tw = this.texture.width,
-		th = this.texture.height;
-	var len = this._lane.length;
-	for(var i=0 ; i<len ; i++) {
-		var lane = this$1._lane[i];
-		var ret$1 = lane.get(code, str, ctx, fw, fh, i*fh.width, this$1.texture);
-		if(ret$1) {
-			var rect = new Rect(ret$1.from, i*this$1._laneH, ret$1.to, (i+1)*this$1._laneH);
-			rect.left /= tw;
-			rect.top /= th;
-			rect.right /= tw;
-			rect.bottom /= th;
-
-			var ret2 = {
-				uvrect: rect,
-				height: fh,
-				width: fw
-			};
-			return this$1._map[code] = ret2;
-		}
-	}
-	// もう入り切るスペースが無ければnullを返す
-	return null;
+    // 既に計算してあればそれを返す
+    {
+        var ret = this._map[code];
+        if (ret)
+            { return ret; }
+    }
+    var tw = this.texture.size().width, th = this.texture.size().height;
+    var len = this._lane.length;
+    for (var i = 0; i < len; i++) {
+        var lane = this$1._lane[i];
+        var ret$1 = lane.get(code, str, ctx, fw, fh, i * fh.width(), this$1.texture);
+        if (ret$1) {
+            var rect = new Rect(ret$1.from, i * this$1._laneH, ret$1.to, (i + 1) * this$1._laneH);
+            rect.left /= tw;
+            rect.top /= th;
+            rect.right /= tw;
+            rect.bottom /= th;
+            var fc = new FontCacheItem(rect, fw, fh);
+            return this$1._map[code] = fc;
+        }
+    }
+    // もう入り切るスペースが無ければnullを返す
+    return null;
 };
-
-Object.defineProperties( FontPlane.prototype, prototypeAccessors$12 );
-//! フォントファミリと一体一で対応
-var FontCache = function FontCache(w, h, laneH) {
-	var assign;
-	(assign = [w, h, laneH], this._width = assign[0], this._height = assign[1], this._laneH = assign[2]);
-	// FontPlane配列
-	this._plane = [];
-	this._addNewPlane();
-	// CharCode -> [Texture, UVRect, Size]
-	this._map = {};
+// フォントファミリと一体一で対応
+var FontCache = function FontCache(_width, _height, _laneH) {
+    this._width = _width;
+    this._height = _height;
+    this._laneH = _laneH;
+    this._plane = [];
+    // CharCode -> FontChar
+    this._map = {};
+    this._addNewPlane();
 };
 FontCache.prototype._addNewPlane = function _addNewPlane () {
-	this._plane.push(new FontPlane(this._width, this._height, this._laneH));
+    this._plane.push(new FontPlane(this._width, this._height, this._laneH));
 };
 /*! \param[in] str 対象の文字列(そのうちの一文字分を処理) */
 FontCache.prototype.get = function get (str, idx, ctx, fh) {
-		var this$1 = this;
+        var this$1 = this;
 
-	var code = str.charCodeAt(idx);
-	// 既に計算してあればそれを返す
-	{
-		var ret$1 = this._map[code];
-		if(ret$1)
-			{ return ret$1; }
-	}
-	var sstr = str.substr(idx, 1);
-	var fw = Math.ceil(ctx.measureText(sstr).width)+2;
-	var ret;
-	for(;;) {
-		ret = this$1._plane.back().get(code, sstr, ctx, fw, fh);
-		if(ret)
-			{ break; }
-		this$1._addNewPlane();
-	}
-	// キャッシュに登録
-	ret = {
-		texture: this._plane.back().texture,
-		uvrect: ret.uvrect,
-		height: ret.height,
-		width: ret.width,
-		chara: true,
-		char: str.charAt(idx),
-		code: code
-	};
-	this._map[code] = ret;
-	return ret;
+    var code = str.charCodeAt(idx);
+    // 既に計算してあればそれを返す
+    {
+        var ret$1 = this._map[code];
+        if (ret$1)
+            { return ret$1; }
+    }
+    var sstr = str.substr(idx, 1);
+    var fw = Math.ceil(ctx.measureText(sstr).width) + 2;
+    var ret;
+    for (;;) {
+        ret = this$1._plane.back().get(code, sstr, ctx, fw, fh);
+        if (ret)
+            { break; }
+        this$1._addNewPlane();
+    }
+    // キャッシュに登録
+    ret = {
+        texture: this._plane.back().texture,
+        uvrect: ret.uvrect,
+        width: ret.width,
+        height: ret.height,
+        chara: true,
+        char: str.charAt(idx),
+        code: code
+    };
+    this._map[code] = ret;
+    return ret;
 };
 var FontGen = function FontGen(w, h, laneH) {
-	this._cache = new FontCache(w, h, laneH);
+    this._cache = new FontCache(w, h, laneH);
 };
 // \return [{texture,uvrect,height,width}, ...]
 FontGen.prototype.get = function get (str, ctx, fh) {
-		var this$1 = this;
+        var this$1 = this;
 
-	var ret = [];
-	for(var i=0 ; i<str.length ; i++) {
-		var ch = str.charAt(i);
-		switch(ch) {
-		case "\n":
-			ret.push({
-				chara: false,
-				char: ch,
-				code: str.charAt(i),
-			});
-			break;
-		default:
-			ret.push(this$1._cache.get(str, i, ctx, fh));
-		}
-	}
-	return ret;
+    var ret = [];
+    for (var i = 0; i < str.length; i++) {
+        var ch = str.charAt(i);
+        switch (ch) {
+            case "\n":
+                ret.push({
+                    chara: false,
+                    char: ch,
+                    code: str.charCodeAt(i)
+                });
+                break;
+            default:
+                ret.push(this$1._cache.get(str, i, ctx, fh));
+        }
+    }
+    return ret;
 };
 
-/* global gl */
 var GLIBuffer = (function (GLBuffer$$1) {
-	function GLIBuffer () {
-		GLBuffer$$1.apply(this, arguments);
-	}
+    function GLIBuffer () {
+        GLBuffer$$1.apply(this, arguments);
+    }
 
-	if ( GLBuffer$$1 ) GLIBuffer.__proto__ = GLBuffer$$1;
-	GLIBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
-	GLIBuffer.prototype.constructor = GLIBuffer;
+    if ( GLBuffer$$1 ) GLIBuffer.__proto__ = GLBuffer$$1;
+    GLIBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
+    GLIBuffer.prototype.constructor = GLIBuffer;
 
-	var prototypeAccessors = { typeId: {} };
+    GLIBuffer.prototype.typeId = function typeId () {
+        return BufferType.Index;
+    };
+    GLIBuffer.prototype.typeQueryId = function typeQueryId () {
+        return BufferQuery.Index;
+    };
 
-	prototypeAccessors.typeId.get = function () {
-		return gl.ELEMENT_ARRAY_BUFFER;
-	};
-
-	Object.defineProperties( GLIBuffer.prototype, prototypeAccessors );
-
-	return GLIBuffer;
+    return GLIBuffer;
 }(GLBuffer));
 
-var Size = function Size(w, h) {
-	this.width = w;
-	this.height = h;
-};
-
-/* global gl engine */
 var PlaneSingleDraw = function PlaneSingleDraw(src) {
-	var vbP = new GLVBuffer();
-	vbP.setData(src._position, glc.E_Drawtype.Static);
-	var vbU = new GLVBuffer();
-	vbU.setData(src._uv, glc.E_Drawtype.Static);
-	var ib = new GLIBuffer();
-	ib.setDataRaw(new Uint16Array(src._index), 1, glc.E_Drawtype.Static);
-	var vbT = new GLVBuffer();
-	vbT.setDataRaw(new Float32Array(src._time), 1, glc.E_Drawtype.Static);
-
-	this.texture = src._texture;
-	this.vb = {
-		a_position: vbP,
-		a_uv: vbU,
-		a_time: vbT,
-	};
-	this.ib = ib;
+    var vbP = new GLVBuffer();
+    vbP.setData(src.position, DrawType.Static, true);
+    var vbU = new GLVBuffer();
+    vbU.setData(src.uv, DrawType.Static, true);
+    var ib = new GLIBuffer();
+    ib.setDataRaw(new Uint16Array(src.index), 1, DrawType.Static, true);
+    var vbT = new GLVBuffer();
+    vbT.setDataRaw(new Float32Array(src.time), 1, DrawType.Static, true);
+    this.texture = src.texture;
+    this.vbuffer = {
+        a_position: vbP,
+        a_uv: vbU,
+        a_time: vbT,
+    };
+    this.ibuffer = ib;
 };
-PlaneSingleDraw.prototype.draw = function draw (offset, time, alpha) {
-		var this$1 = this;
+PlaneSingleDraw.prototype.draw = function draw (offset, time, timeDelay, alpha) {
+        var this$1 = this;
 
-	engine.setUniform("u_texture", this.texture);
-	engine.setUniform("u_screenSize", new Vec2(engine.width, engine.height));
-	engine.setUniform("u_offset", offset);
-	engine.setUniform("u_time", time);
-	engine.setUniform("u_alpha", alpha);
-	engine.draw(function (){ DrawWithGeom(this$1, gl.TRIANGLES); });
+    engine.setUniform("u_texture", this.texture);
+    var s = engine.size();
+    engine.setUniform("u_screenSize", new Vec2(s.width, s.height));
+    engine.setUniform("u_offset", offset);
+    engine.setUniform("u_time", time);
+    engine.setUniform("u_alpha", alpha);
+    engine.setUniform("u_delay", timeDelay);
+    engine.draw(function () { DrawWithGeom(this$1, gl.TRIANGLES); });
 };
 var PlaneSingle = function PlaneSingle(tex) {
-	this._texture = tex;
-	this._position = [];
-	this._uv = [];
-	this._time = [];
-	this._index = [];
-	this._accumTime = 0;	// 総時間
-	this._tpix = new Vec2(0.5/tex.width, 0.5/tex.height);
+    this.texture = tex;
+    this.position = [];
+    this.uv = [];
+    this.time = [];
+    this.index = [];
+    this._accumTime = 0; // 総時間
+    var s = tex.size();
+    this._tpix = new Vec2(0.5 / s.width, 0.5 / s.height);
 };
 PlaneSingle.prototype.add = function add (ofs, fc, t) {
-	var idxBase = this._position.length;
-	{
-		var pos = this._position;
-		pos.push(new Vec2(ofs.x+0.5,	ofs.y+fc.height.from+0.5));
-		pos.push(new Vec2(ofs.x+fc.width-0.5,ofs.y+fc.height.from+0.5));
-		pos.push(new Vec2(ofs.x+0.5,		ofs.y+fc.height.to-0.5));
-		pos.push(new Vec2(ofs.x+fc.width-0.5,ofs.y+fc.height.to-0.5));
-	}
-	{
-		// [xy=テクスチャuv, yz=ローカルUV]
-		var uv = this._uv;
-		var r = fc.uvrect;
-		var tp = this._tpix;
-		uv.push(new Vec4(r.left+tp.x,r.top+tp.y,	0,	0));
-		uv.push(new Vec4(r.right-tp.x,r.top+tp.y,	1,	0));
-		uv.push(new Vec4(r.left+tp.x,r.bottom-tp.y,0,	1));
-		uv.push(new Vec4(r.right-tp.x,r.bottom-tp.y,1,	1));
-	}
-	{
-		var time = this._time;
-		for(var i=0 ; i<4; i++)
-			{ time.push(t); }
-	}
-	this._index = this._index.concat([
-		idxBase+0,
-		idxBase+1,
-		idxBase+3,
-		idxBase+0,
-		idxBase+3,
-		idxBase+2
-	]);
+    var fw = fc.width;
+    var fh = fc.height;
+    var idxBase = this.position.length;
+    {
+        var pos = this.position;
+        pos.push(new Vec2(ofs.x + 0.5, ofs.y + fh.from + 0.5));
+        pos.push(new Vec2(ofs.x + fw - 0.5, ofs.y + fh.from + 0.5));
+        pos.push(new Vec2(ofs.x + 0.5, ofs.y + fh.to - 0.5));
+        pos.push(new Vec2(ofs.x + fw - 0.5, ofs.y + fh.to - 0.5));
+    }
+    {
+        // [xy=テクスチャuv, yz=ローカルUV]
+        var uv = this.uv;
+        var r = fc.uvrect;
+        var tp = this._tpix;
+        uv.push(new Vec4(r.left + tp.x, r.top + tp.y, 0, 0));
+        uv.push(new Vec4(r.right - tp.x, r.top + tp.y, 1, 0));
+        uv.push(new Vec4(r.left + tp.x, r.bottom - tp.y, 0, 1));
+        uv.push(new Vec4(r.right - tp.x, r.bottom - tp.y, 1, 1));
+    }
+    {
+        var time = this.time;
+        for (var i = 0; i < 4; i++)
+            { time.push(t); }
+    }
+    this.index = this.index.concat([
+        idxBase + 0,
+        idxBase + 1,
+        idxBase + 3,
+        idxBase + 0,
+        idxBase + 3,
+        idxBase + 2
+    ]);
 };
 PlaneSingle.prototype.makeBuffer = function makeBuffer () {
-	return new PlaneSingleDraw(this);
+    return new PlaneSingleDraw(this);
 };
-//! 行毎に文字列を配置
+// 行毎に文字列を配置
 function CharPlaceLines(fp, lineH, width) {
-	var ret = [];
-	var cur = 0;
-	for(;;) {
-		var to = GetLine(fp, cur);
-		if(cur === to) {
-			break;
-		}
-		var fpL = CharPlace(fp, lineH, new Size(width, 512), cur, to);
-		ret.push(fpL);
-		cur = to+1;
-	}
-	return ret;
+    var ret = [];
+    var cur = 0;
+    while (cur < fp.length) {
+        var to = GetLine(fp, cur);
+        if (cur !== to) {
+            var fpL = CharPlace(fp, lineH, new Size(width, 512), cur, to);
+            ret.push(fpL);
+        }
+        else {
+            var empty = {
+                length: 0,
+                plane: [],
+                inplace: true,
+                resultSize: new Size(0, 0),
+            };
+            ret.push(empty);
+        }
+        cur = to + 1;
+    }
+    return ret;
 }
-//! 指定された矩形に文字列を配置
+// 指定された矩形に文字列を配置
 function CharPlace(fp, lineH, size, from, to) {
-	if ( from === void 0 ) from=0;
-	if ( to === void 0 ) to=fp.length;
+    if ( from === void 0 ) from = 0;
+    if ( to === void 0 ) to = fp.length;
 
-	// {[texture]: PlaneSingle}
-	var vi = new Map();
-	var cur = new Vec2(0,0);
-	var nl = function (){
-		cur.x = 0;
-		cur.y += lineH;
-		if(cur.y+lineH > size.height) {
-			return false;
-		}
-		resultSize.height += lineH;
-		return true;
-	};
-	var time = 0;
-	// 実際に配置された矩形サイズ
-	var resultSize = new Size(0,0);
-	// 引数の矩形に収まったかのフラグ
-	var inPlace = true;
-	Place: for(var i=from ; i<to ; i++) {
-		var f = fp[i];
-		if(f.chara) {
-			// 通常の文字コード
-			// 枠を越えるなら改行
-			if(cur.x+f.width > size.width) {
-				if(!nl()) {
-					inPlace = false;
-					break Place;
-				}
-			}
-			var ps = (void 0);
-			if(vi.has(f.texture))
-				{ ps = vi.get(f.texture); }
-			else {
-				ps = new PlaneSingle(f.texture);
-				vi.set(f.texture, ps);
-			}
-			ps.add(cur, f, time++);
-			cur.x += f.width;
-			resultSize.width = Math.max(resultSize.width, cur.x);
-		} else {
-			// 制御文字
-			switch(f.char) {
-			case "\n":
-				// 改行
-				if(!nl()) {
-					inPlace = false;
-					break Place;
-				}
-				break;
-			}
-		}
-	}
-	resultSize.height += lineH;
-	// 配列に詰め直し
-	var plane = [];
-	var itr = vi.entries();
-	for(;;) {
-		var ent = itr.next();
-		if(ent.done)
-			{ break; }
-		plane.push(ent.value[1].makeBuffer());
-	}
-	return {
-		length: time,
-		plane: plane,
-		inplace: inPlace,
-		resultSize: resultSize,
-	};
+    // {[texture]: PlaneSingle}
+    var vi = new Map();
+    var cur = new Vec2(0, 0);
+    var nl = function () {
+        cur.x = 0;
+        cur.y += lineH;
+        if (cur.y + lineH > size.height) {
+            return false;
+        }
+        resultSize.height += lineH;
+        return true;
+    };
+    var time = 0;
+    // 実際に配置された矩形サイズ
+    var resultSize = new Size(0, 0);
+    // 引数の矩形に収まったかのフラグ
+    var inPlace = true;
+    Place: for (var i = from; i < to; i++) {
+        var f = fp[i];
+        if (f.chara) {
+            // 通常の文字コード
+            // 枠を越えるなら改行
+            if (cur.x + f.width > size.width) {
+                if (!nl()) {
+                    inPlace = false;
+                    break Place;
+                }
+            }
+            var ps = (void 0);
+            if (vi.has(f.texture))
+                { ps = vi.get(f.texture); }
+            else {
+                ps = new PlaneSingle(f.texture);
+                vi.set(f.texture, ps);
+            }
+            ps.add(cur, f, time++);
+            cur.x += f.width;
+            resultSize.width = Math.max(resultSize.width, cur.x);
+        }
+        else {
+            // 制御文字
+            switch (f.char) {
+                case "\n":
+                    // 改行
+                    if (!nl()) {
+                        inPlace = false;
+                        break Place;
+                    }
+                    break;
+            }
+        }
+    }
+    resultSize.height += lineH;
+    // 配列に詰め直し
+    var plane = [];
+    var itr = vi.entries();
+    for (;;) {
+        var ent = itr.next();
+        if (ent.done)
+            { break; }
+        plane.push(ent.value[1].makeBuffer());
+    }
+    return {
+        length: time,
+        plane: plane,
+        inplace: inPlace,
+        resultSize: resultSize,
+    };
 }
 
+var RefreshDep = function RefreshDep(depend, // 依存パラメータリスト(string)
+    flag, // 該当フラグ値
+    upperFlag, // パラメータを更新した場合にセットするフラグ値(後で計算)
+    lowerFlag, // パラメータを更新した場合にクリアするフラグ値(後で計算)
+    value) {
+    this.depend = depend;
+    this.flag = flag;
+    this.upperFlag = upperFlag;
+    this.lowerFlag = lowerFlag;
+    this.value = value;
+};
 var Refresh = function Refresh(def) {
-	var this$1 = this;
+    var this$1 = this;
 
-	var flagCur = 0x01;
-	this._entry = {};
-	var keys = Object.keys(def);
-	keys.forEach(function (k){
-		this$1._entry[k] = {
-			depend: def[k],	//!< 依存パラメータリスト(string)
-			flag: flagCur,	//!< 該当フラグ値
-			upperFlag: 0,	//!< パラメータを更新した場合にセットするフラグ値(後で計算)
-			lowerFlag: 0,	//!< パラメータを更新した場合にクリアするフラグ値(後で計算)
-			value: null
-		};
-		Assert$1(flagCur <= 0x80000000);
-		flagCur <<= 1;
-	});
-	// Depフラグ計算
-	keys.forEach(function (k){
-		var ent = this$1._entry[k];
-		ent.lowerFlag = this$1._calcLower(k, 0);
-		Assert$1((ent.upperFlag & ent.lowerFlag) === 0);
-		Assert$1((ent.flag & ent.lowerFlag) === ent.flag);
-	});
-	this.reset();
+    var flagCur = 0x01;
+    this._entry = {};
+    var keys = Object.keys(def);
+    keys.forEach(function (k) {
+        this$1._entry[k] = new RefreshDep(def[k], flagCur, 0, 0, null);
+        Assert(flagCur <= 0x80000000);
+        flagCur <<= 1;
+    });
+    // Depフラグ計算
+    keys.forEach(function (k) {
+        var ent = this$1._entry[k];
+        ent.lowerFlag = this$1._calcLower(k, 0);
+        Assert((ent.upperFlag & ent.lowerFlag) === 0);
+        Assert((ent.flag & ent.lowerFlag) === ent.flag);
+    });
+    this.reset();
 };
 Refresh.prototype._calcLower = function _calcLower (k, upper) {
-		var this$1 = this;
+        var this$1 = this;
 
-	var ent = this._entry[k];
-	ent.upperFlag |= upper;
-	var flag = ent.flag;
-	if(ent.depend) {
-		for(var i=0 ; i<ent.depend.length ; i++) {
-			flag |= this$1._calcLower(ent.depend[i], upper|ent.flag);
-		}
-	}
-	return flag;
+    var ent = this._entry[k];
+    ent.upperFlag |= upper;
+    var flag = ent.flag;
+    if (ent.depend) {
+        for (var i = 0; i < ent.depend.length; i++) {
+            flag |= this$1._calcLower(ent.depend[i], upper | ent.flag);
+        }
+    }
+    return flag;
 };
 Refresh.prototype.reset = function reset () {
-	this._reflag = ~0;
+    this._reflag = ~0;
 };
 Refresh.prototype.set = function set (key, value) {
-	var ent = this._entry[key];
-	ent.value = value;
-	this._reflag &= ~ent.lowerFlag;
-	this._reflag |= ent.upperFlag;
+    var ent = this._entry[key];
+    ent.value = value;
+    this._reflag &= ~ent.lowerFlag;
+    this._reflag |= ent.upperFlag;
 };
 Refresh.prototype.get = function get (key) {
-	var ent = this._entry[key];
-	if(this._reflag & ent.flag) {
-		ent.value = this[("_refresh_" + key)]();
-		this._reflag &= ~ent.flag;
-	}
-	return ent.value;
+    var ent = this._entry[key];
+    if (this._reflag & ent.flag) {
+        ent.value = this[("_refresh_" + key)]();
+        this._reflag &= ~ent.flag;
+    }
+    return ent.value;
 };
 
-ResourceGen.TextRect = function() {
-	var buff = {
-		vb: {
-			a_position: new GLVBuffer(),
-			a_uv: new GLVBuffer()
-		},
-		ib: new GLIBuffer()
-	};
-	buff.vb.a_position.setData([
-		new Vec2(0,0),
-		new Vec2(0,1),
-		new Vec2(1,1),
-		new Vec2(1,0)
-	], glc.E_Drawtype.Static);
-	buff.vb.a_uv.setData([
-		new Vec2(0,0),
-		new Vec2(0,1),
-		new Vec2(1,1),
-		new Vec2(1,0)
-	], glc.E_Drawtype.Static);
-	buff.ib.setDataRaw(
-		new Uint16Array([0,1,2, 2,3,0]),
-		1,
-		glc.E_Drawtype.Static
-	);
-	return buff;
+ResourceGenSrc.TextRect = function (rp) {
+    var buff = {
+        vbuffer: {
+            a_position: new GLVBuffer(),
+            a_uv: new GLVBuffer()
+        },
+        ibuffer: new GLIBuffer()
+    };
+    buff.vbuffer.a_position.setData([
+        new Vec2(0, 0),
+        new Vec2(0, 1),
+        new Vec2(1, 1),
+        new Vec2(1, 0)
+    ], DrawType.Static, true);
+    buff.vbuffer.a_uv.setData([
+        new Vec2(0, 0),
+        new Vec2(0, 1),
+        new Vec2(1, 1),
+        new Vec2(1, 0)
+    ], DrawType.Static, true);
+    buff.ibuffer.setDataRaw(new Uint16Array([0, 1, 2, 2, 3, 0]), 1, DrawType.Static, true);
+    return new ResourceWrap(buff);
 };
-var _ = ResourceGen.TextRect;
 
-window._ = _;
-
-/* global engine */
-//! スクリーン上に配置するテキスト
-/*!
-	[shader requirements]
-	attribute {
-		vec2 a_position;
-		vec4 a_uv;
-		float a_time;
-	}
-	uniform {
-		float u_time;
-		float u_alpha;
-		vec2 u_offset;
-		vec2 u_screenSize;
-		sampler2D u_texture;
-	}
+// スクリーン上に配置するテキスト
+/*
+    [shader requirements]
+    attribute {
+        vec2 a_position;
+        vec4 a_uv;
+        float a_time;
+    }
+    uniform {
+        float u_time;
+        float u_alpha;
+        float u_delay;
+        vec2 u_offset;
+        vec2 u_screenSize;
+        sampler2D u_texture;
+    }
 */
 var Text = (function (Refresh$$1) {
-	function Text() {
-		Refresh$$1.call(this, {
-			font: null,
-			text: null,
-			size: null,
-			fontheight: ["font"],
-			fontgen: ["fontheight"],
-			fontplane: ["fontheight", "fontgen", "text", "size"],
-			length: ["fontplane"],
-		});
-		this.font = new Font("arial", "30pt", 100, false);
-		this.text = "DefaultText";
-		this.size = new Size(512,512);
-	}
+    function Text() {
+        Refresh$$1.call(this, ( obj = {}, obj[Text.TagFont] = null, obj[Text.TagText] = null, obj[Text.TagSize] = null, obj[Text.TagFontHeight] = [Text.TagFont], obj[Text.TagFontGen] = [Text.TagFontHeight], obj[Text.TagFontPlane] = [Text.TagFontHeight, Text.TagFontGen, Text.TagText, Text.TagSize], obj[Text.TagLength] = [Text.TagFontPlane], obj[Text.TagResultSize] = [Text.TagFontPlane], obj ));
+        var obj;
+        this.setFont(new Font("arial", "30pt", "100", false));
+        this.setText("DefaultText");
+        this.setSize(new Size(512, 512));
+    }
 
-	if ( Refresh$$1 ) Text.__proto__ = Refresh$$1;
-	Text.prototype = Object.create( Refresh$$1 && Refresh$$1.prototype );
-	Text.prototype.constructor = Text;
+    if ( Refresh$$1 ) Text.__proto__ = Refresh$$1;
+    Text.prototype = Object.create( Refresh$$1 && Refresh$$1.prototype );
+    Text.prototype.constructor = Text;
+    Text.prototype.setFont = function setFont (f) { this.set(Text.TagFont, f); };
+    Text.prototype.setText = function setText (t) { this.set(Text.TagText, t); };
+    Text.prototype.setSize = function setSize (r) { this.set(Text.TagSize, r); };
+    Text.prototype.font = function font () { return this.get(Text.TagFont); };
+    Text.prototype.text = function text () { return this.get(Text.TagText); };
+    Text.prototype.size = function size () { return this.get(Text.TagSize); };
+    Text.prototype.fontplane = function fontplane () { return this.get(Text.TagFontPlane); };
+    Text.prototype.length = function length () { return this.fontplane().length; };
+    Text.prototype.resultSize = function resultSize () { return this.get(Text.TagResultSize); };
+    Text.prototype.fontHeight = function fontHeight () { return this.get(Text.TagFontHeight); };
+    Text.prototype.fontGen = function fontGen () { return this.get(Text.TagFontGen); };
+    Text.prototype._refresh_fontheight = function _refresh_fontheight () {
+        return ResourceGen.get(new RPFontHeight(this.font())).data;
+    };
+    Text.prototype._refresh_fontgen = function _refresh_fontgen () {
+        var fh = this.fontHeight();
+        return new FontGen(512, 512, fh.width());
+    };
+    Text.prototype._refresh_resultsize = function _refresh_resultsize () {
+        return this.fontplane().resultSize;
+    };
+    Text.prototype._makeFontA = function _makeFontA () {
+        var fh = this.fontHeight();
+        var gen = this.fontGen();
+        var ctx = ResourceGen.get(new RP_FontCtx("fontcanvas"));
+        ctx.data.font = this.font().fontstr();
+        return {
+            fontA: gen.get(this.text(), ctx.data, fh),
+            fh: fh
+        };
+    };
+    Text.prototype._refresh_fontplane = function _refresh_fontplane () {
+        var fa = this._makeFontA();
+        return CharPlace(fa.fontA, fa.fh.to, this.size());
+    };
+    Text.prototype.draw = function draw (offset, time, timeDelay, alpha) {
+        var plane = this.fontplane().plane;
+        for (var i = 0; i < plane.length; i++) {
+            plane[i].draw(offset, time, timeDelay, alpha);
+        }
+    };
 
-	var prototypeAccessors = { font: {},text: {},size: {},length: {},resultSize: {} };
-	prototypeAccessors.font.set = function (f) { this.set("font", f); };
-	prototypeAccessors.text.set = function (t) { this.set("text", t); };
-	prototypeAccessors.size.set = function (r) { this.set("size", r); };
-	prototypeAccessors.font.get = function () { return this.get("font"); };
-	prototypeAccessors.text.get = function () { return this.get("text"); };
-	prototypeAccessors.size.get = function () { return this.get("size"); };
-	prototypeAccessors.length.get = function () { return this.get("fontplane").length; };
-	prototypeAccessors.resultSize.get = function () { return this.get("fontplane").resultSize; };
-
-	Text.prototype._refresh_fontheight = function _refresh_fontheight () {
-		return ResourceGen.get(new RP_FontHeight(this.font));
-	};
-	Text.prototype._refresh_fontgen = function _refresh_fontgen () {
-		var fh = this.get("fontheight");
-		return new FontGen(512, 512, fh.width);
-	};
-	Text.prototype._makeFontA = function _makeFontA () {
-		var fh = this.get("fontheight");
-		var gen = this.get("fontgen");
-		var ctx = ResourceGen.get(new RP_FontCtx("fontcanvas"));
-		ctx.font = this.font.fontstr;
-		return {
-			fontA: gen.get(this.text, ctx, fh),
-			fh: fh
-		};
-	};
-	Text.prototype._refresh_fontplane = function _refresh_fontplane () {
-		var fa = this._makeFontA();
-		return CharPlace(fa.fontA, fa.fh.to, this.size);
-	};
-	Text.prototype.draw = function draw (offset, time, alpha) {
-		engine.technique = "text";
-		var plane = this.get("fontplane").plane;
-		for(var i=0 ; i<plane.length ; i++) {
-			plane[i].draw(offset, time, alpha);
-		}
-	};
-
-	Object.defineProperties( Text.prototype, prototypeAccessors );
-
-	return Text;
+    return Text;
 }(Refresh));
-var TextLines = (function (Text) {
-	function TextLines() {
-		Text.call(this);
-		// 行ディレイ(1行毎に何秒遅らせるか)
-		this.lineDelay = 0;
-	}
 
-	if ( Text ) TextLines.__proto__ = Text;
-	TextLines.prototype = Object.create( Text && Text.prototype );
-	TextLines.prototype.constructor = TextLines;
+Text.TagFont = "font";
+Text.TagText = "text";
+Text.TagSize = "size";
+Text.TagFontHeight = "fontheight";
+Text.TagFontGen = "fontgen";
+Text.TagFontPlane = "fontplane";
+Text.TagLength = "length";
+Text.TagResultSize = "resultsize";
 
-	var prototypeAccessors$1 = { length: {} };
-	TextLines.prototype._refresh_fontplane = function _refresh_fontplane () {
-		var fa = Text.prototype._makeFontA.call(this);
-		return CharPlaceLines(fa.fontA, fa.fh.to, this.size);
-	};
-	prototypeAccessors$1.length.get = function () {
-		var this$1 = this;
+var TextLines = (function (Text$$1) {
+    function TextLines(lineDelay) {
+        Text$$1.call(this);
+        // 行ディレイ(1行毎に何秒遅らせるか)
+        this.lineDelay = 0;
+        this.lineDelay = lineDelay;
+    }
 
-		var fps = this.get("fontplane");
-		if(fps.length === 0)
-			{ return 0; }
-		var len = 0;
-		for(var i=0 ; i<fps.length ; i++) {
-			len = Math.max(len, fps[i].length + this$1.lineDelay*i);
-		}
-		return len;
-	};
-	TextLines.prototype.draw = function draw (offset, time, alpha) {
-		var this$1 = this;
+    if ( Text$$1 ) TextLines.__proto__ = Text$$1;
+    TextLines.prototype = Object.create( Text$$1 && Text$$1.prototype );
+    TextLines.prototype.constructor = TextLines;
+    TextLines.prototype._refresh_fontplane = function _refresh_fontplane () {
+        var fa = Text$$1.prototype._makeFontA.call(this);
+        return CharPlaceLines(fa.fontA, fa.fh.to, this.size().width);
+    };
+    TextLines.prototype._refresh_resultsize = function _refresh_resultsize () {
+        var this$1 = this;
 
-		engine.technique = "text";
-		var fh = this.get("fontheight");
-		var ps = this.get("fontplane");
-		offset = offset.clone;
-		for(var k=0 ; k<ps.length ; k++) {
-			var plane = ps[k].plane;
-			for(var i=0 ; i<plane.length ; i++) {
-				plane[i].draw(offset, time, alpha);
-				offset.y += fh.to;
-				time -= this$1.lineDelay;
-			}
-		}
-	};
+        var fp = this.get(Text$$1.TagFontPlane);
+        var ret = new Size(0, 0);
+        for (var i = 0; i < fp.length; i++) {
+            ret.width = Math.max(ret.width, fp[i].resultSize.width);
+            ret.height += this$1.fontHeight().to;
+        }
+        return ret;
+    };
+    TextLines.prototype.length = function length () {
+        var this$1 = this;
 
-	Object.defineProperties( TextLines.prototype, prototypeAccessors$1 );
+        var fps = this.get(Text$$1.TagFontPlane);
+        if (fps.length === 0)
+            { return 0; }
+        var len = 0;
+        for (var i = 0; i < fps.length; i++) {
+            len = Math.max(len, fps[i].length + this$1.lineDelay * i);
+        }
+        return len;
+    };
+    TextLines.prototype.draw = function draw (offset, time, timeDelay, alpha) {
+        var this$1 = this;
 
-	return TextLines;
+        var fh = this.fontHeight();
+        var ps = this.get(Text$$1.TagFontPlane);
+        offset = offset.clone();
+        for (var k = 0; k < ps.length; k++) {
+            var plane = ps[k].plane;
+            for (var i = 0; i < plane.length; i++) {
+                plane[i].draw(offset, time, timeDelay, alpha);
+                time -= this$1.lineDelay;
+            }
+            offset.y += fh.to;
+        }
+    };
+
+    return TextLines;
 }(Text));
 
-var TextDraw = (function (Drawable$$1) {
-	function TextDraw(text) {
-		Drawable$$1.call(this);
-		this.text = text;
-		this.time = 0;
-		this.offset = new Vec2(0,0);
-		this.alpha = 1;
-	}
+var GLRenderbuffer = function GLRenderbuffer() {
+    this._rf = new GLResourceFlag();
+    this._bBind = false;
+    this._size = new Size(0, 0);
+    glres.add(this);
+};
+GLRenderbuffer.prototype.size = function size () {
+    return this._size;
+};
+GLRenderbuffer.prototype.format = function format () {
+    return this._format;
+};
+GLRenderbuffer.prototype.id = function id () {
+    return this._id;
+};
+GLRenderbuffer.prototype.allocate = function allocate (fmt, w, h) {
+    var assign;
+        (assign = [fmt, w, h], this._size.width = assign[0], this._size.height = assign[1], this._format = assign[2]);
+    this.proc(function () {
+        gl.renderbufferStorage(gl.RENDERBUFFER, GLConst.RBFormatC.convert(fmt), w, h);
+    });
+};
+// ------------- from Discardable -------------
+GLRenderbuffer.prototype.discard = function discard () {
+    Assert(!this._bBind, "still binding somewhere");
+    this.onContextLost();
+    this._rf.discard();
+};
+GLRenderbuffer.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+// ------------- from Bindable -------------
+GLRenderbuffer.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(!this._bBind, "already binded");
+    gl.bindRenderbuffer(gl.RENDERBUFFER, this.id());
+    this._bBind = true;
+};
+GLRenderbuffer.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
 
-	if ( Drawable$$1 ) TextDraw.__proto__ = Drawable$$1;
-	TextDraw.prototype = Object.create( Drawable$$1 && Drawable$$1.prototype );
-	TextDraw.prototype.constructor = TextDraw;
-	TextDraw.prototype.advance = function advance (dt) {
-		if(this.time >= this.text.length+8) {
-			return true;
-		}
-		this.time += dt;
-		return false;
-	};
-	TextDraw.prototype.onUpdate = function onUpdate () {
-		if(Drawable$$1.prototype.onUpdate.call(this)) {
-			engine.technique = "text";
-			this.text.draw(this.offset, this.time, this.alpha);
-			return true;
-		}
-		return false;
-	};
+    Assert(this._bBind, "not binded yet");
+    gl.bindRenderbuffer(gl.RENDERBUFFER, id);
+    this._bBind = false;
+};
+GLRenderbuffer.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(gl.RENDERBUFFER_BINDING);
+    this.bind();
+    cb();
+    this.unbind(prev);
+};
+// ------------- from GLContext -------------
+GLRenderbuffer.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
 
-	return TextDraw;
-}(Drawable));
+    this._rf.onContextLost(function () {
+        gl.deleteRenderbuffer(this$1.id());
+        this$1._id = null;
+    });
+};
+GLRenderbuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
 
-/* global engine resource */
+    this._rf.onContextRestored(function () {
+        this$1._id = gl.createRenderbuffer();
+        if (this$1._format)
+            { this$1.allocate(this$1._format, this$1._size.width, this$1._size.height); }
+    });
+};
+GLRenderbuffer.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+
+var GLFramebuffer = function GLFramebuffer() {
+    var this$1 = this;
+
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._bBind = false;
+    this._attachment = [];
+    glres.add(this);
+    for (var i = 0; i < GLConst.AttachmentC.length(); i++)
+        { this$1._attachment[i] = null; }
+};
+GLFramebuffer.prototype._applyAttachment = function _applyAttachment (pos) {
+    var buff = this._attachment[pos];
+    var pos_gl = GLConst.AttachmentC.convert(pos);
+    if (buff instanceof GLRenderbuffer) {
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, pos_gl, gl.RENDERBUFFER, buff.id());
+    }
+    else if (buff instanceof GLTexture2D) {
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, pos_gl, gl.TEXTURE_2D, buff.id(), 0);
+    }
+    else {
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, pos_gl, gl.RENDERBUFFER, null);
+    }
+};
+GLFramebuffer.prototype.id = function id () {
+    return this._id;
+};
+GLFramebuffer.prototype.status = function status () {
+    var statusStr = {};
+        statusStr[gl.FRAMEBUFFER_COMPLETE] = "complete";
+        statusStr[gl.FRAMEBUFFER_UNSUPPORTED] = "unsupported";
+        statusStr[gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT] = "incomplete_attachment";
+        statusStr[gl.FRAMEBUFFER_INCOMPLETE_DIMENSIONS] = "incomplete_dimensions";
+        statusStr[gl.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT] = "incomplete_missing_attachment";
+    var result = "";
+    this.proc(function () {
+        result = statusStr[gl.checkFramebufferStatus(gl.FRAMEBUFFER)];
+    });
+    return result;
+};
+GLFramebuffer.prototype.attach = function attach (pos, buff) {
+        var this$1 = this;
+
+    this._attachment[pos] = buff;
+    this.proc(function () {
+        this$1._applyAttachment(pos);
+    });
+};
+GLFramebuffer.prototype.getAttachment = function getAttachment (pos) {
+    return this._attachment[pos];
+};
+GLFramebuffer.prototype.clear = function clear (pos) {
+        var this$1 = this;
+
+    this._attachment[pos] = null;
+    this.proc(function () {
+        this$1._applyAttachment(pos);
+    });
+};
+// ---------------- from Binable ----------------
+GLFramebuffer.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(!this._bBind, "already binded");
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.id());
+    this._bBind = true;
+};
+GLFramebuffer.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(this._bBind, "not binded yet");
+    gl.bindFramebuffer(gl.FRAMEBUFFER, id);
+    this._bBind = false;
+};
+GLFramebuffer.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    this.bind();
+    cb();
+    this.unbind(prev);
+};
+// ---------------- from Discardable ----------------
+GLFramebuffer.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+GLFramebuffer.prototype.discard = function discard () {
+    Assert(!this._bBind, "still binding somewhere");
+    this.onContextLost();
+    this._rf.discard();
+};
+// ---------------- from GLContext ----------------
+GLFramebuffer.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+    this._rf.onContextLost(function () {
+        Assert(!this$1._bBind);
+        gl.deleteFramebuffer(this$1._id);
+        this$1._id = null;
+    });
+};
+GLFramebuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+    this._rf.onContextRestored(function () {
+        Assert(!this$1._bBind);
+        this$1._id = gl.createFramebuffer();
+        this$1.proc(function () {
+            for (var i = 0; i < GLConst.AttachmentC.length(); i++) {
+                this$1._applyAttachment(i);
+            }
+        });
+    });
+};
+GLFramebuffer.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+
+var RPString = function RPString(name) {
+    this.name = name;
+};
+
+var prototypeAccessors$4 = { key: {} };
+prototypeAccessors$4.key.get = function () { return this.name; };
+
+Object.defineProperties( RPString.prototype, prototypeAccessors$4 );
+
+function MakeRect(ofs, sc) {
+    return {
+        vertex: [
+            new Vec2(0, 0).addSelf(ofs),
+            new Vec2(0, sc.y).addSelf(ofs),
+            new Vec2(sc.x, sc.y).addSelf(ofs),
+            new Vec2(sc.x, 0).addSelf(ofs)
+        ],
+        uv: [
+            new Vec2(0, 0),
+            new Vec2(0, 1),
+            new Vec2(1, 1),
+            new Vec2(1, 0)
+        ],
+        index: [
+            0, 1, 2, 2, 3, 0
+        ]
+    };
+}
+function MakeRectVI(ofs, sc) {
+    var buff = {
+        vbuffer: {
+            a_position: new GLVBuffer(),
+            a_uv: new GLVBuffer()
+        },
+        ibuffer: new GLIBuffer()
+    };
+    var rect = MakeRect(ofs, sc);
+    buff.vbuffer.a_position.setData(rect.vertex, DrawType.Static, true);
+    buff.vbuffer.a_uv.setData(rect.uv, DrawType.Static, true);
+    buff.ibuffer.setDataRaw(new Uint16Array(rect.index), 1, DrawType.Static, true);
+    return buff;
+}
+ResourceGenSrc.Rect05 = function (rp) {
+    return new ResourceWrap(MakeRectVI(new Vec2(-0.5, -0.5), new Vec2(1)));
+};
+ResourceGenSrc.Rect01 = function (rp) {
+    return new ResourceWrap(MakeRectVI(new Vec2(-1), new Vec2(2)));
+};
+ResourceGenSrc.Trihedron = function () {
+    var buff = {
+        vbuffer: {
+            a_position: new GLVBuffer(),
+            a_color: new GLVBuffer(),
+            a_uv: new GLVBuffer()
+        },
+        ibuffer: new GLIBuffer()
+    };
+    buff.vbuffer.a_position.setData([
+        new Vec3(-1, -1, 1),
+        new Vec3(0, -1, -1),
+        new Vec3(1, -1, 1),
+        new Vec3(0, 1, 0)
+    ], DrawType.Static, true);
+    buff.vbuffer.a_uv.setData([
+        new Vec4(1, 1, 1, 1),
+        new Vec4(1, 0, 0, 1),
+        new Vec4(0, 0, 1, 1),
+        new Vec4(0, 1, 0, 1)
+    ], DrawType.Static, true);
+    buff.ibuffer.setDataRaw(new Uint16Array([
+        2, 1, 0,
+        1, 3, 0,
+        2, 3, 1,
+        0, 3, 2
+    ]), 1, DrawType.Static, true);
+    return new ResourceWrap(buff);
+};
+var RPGeometry = (function (RPString$$1) {
+    function RPGeometry () {
+        RPString$$1.apply(this, arguments);
+    }if ( RPString$$1 ) RPGeometry.__proto__ = RPString$$1;
+    RPGeometry.prototype = Object.create( RPString$$1 && RPString$$1.prototype );
+    RPGeometry.prototype.constructor = RPGeometry;
+
+    
+
+    return RPGeometry;
+}(RPString));
+
+var FullRect = (function (DObject$$1) {
+    function FullRect() {
+        DObject$$1.apply(this, arguments);
+        this._rect = ResourceGen.get(new RPGeometry("Rect01"));
+        this.alpha = 1;
+    }
+
+    if ( DObject$$1 ) FullRect.__proto__ = DObject$$1;
+    FullRect.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    FullRect.prototype.constructor = FullRect;
+    FullRect.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        if (!this.texture)
+            { return; }
+        engine.setTechnique("rect");
+        engine.setUniform("u_texture", this.texture);
+        engine.setUniform("u_alpha", this.alpha);
+        engine.draw(function () {
+            DrawWithGeom(this$1._rect.data, gl.TRIANGLES);
+        });
+    };
+
+    return FullRect;
+}(DObject));
+
+var FBSwitch = (function (DObject$$1) {
+    function FBSwitch(buffer) {
+        DObject$$1.call(this);
+        this.buffer = buffer;
+    }
+
+    if ( DObject$$1 ) FBSwitch.__proto__ = DObject$$1;
+    FBSwitch.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    FBSwitch.prototype.constructor = FBSwitch;
+    FBSwitch.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        this.buffer.proc(function () {
+            this$1.lower.onDraw();
+        });
+    };
+
+    return FBSwitch;
+}(DObject));
+
+var DataSwitch = function DataSwitch(data0, data1) {
+    this._data = [];
+    this._sw = 0;
+    this._data[0] = data0;
+    this._data[1] = data1;
+};
+DataSwitch.prototype.current = function current () {
+    return this._data[this._sw];
+};
+DataSwitch.prototype.prev = function prev () {
+    return this._data[this._sw ^ 1];
+};
+DataSwitch.prototype.swap = function swap () {
+    this._sw ^= 1;
+};
+
+var DrawSort;
+(function (DrawSort) {
+    DrawSort.Priority = function (t0, t1) {
+        if (t0.priority < t1.priority)
+            { return -1; }
+        if (t0.priority > t1.priority)
+            { return 1; }
+        return 0;
+    };
+})(DrawSort || (DrawSort = {}));
+
+var Alias = { "common": "resource/common.glsl", "prog": "resource/prog.prog", "rectf": "resource/rectf.fsh", "rectv": "resource/rectv.vsh", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "testf": "resource/testf.fsh", "testv": "resource/testv.vsh", "textf": "resource/textf.fsh", "textv": "resource/textv.vsh", "textvalueset": "resource/textvalueset.def", "valueset": "resource/valueset.def", "valuesetP": "resource/valuesetP.def" };
+
 // particle dance
-var St_Particle = (function (State$$1) {
-	function St_Particle () {
-		State$$1.apply(this, arguments);
-	}
+var StParticle = (function (State$$1) {
+    function StParticle () {
+        State$$1.apply(this, arguments);
+    }
 
-	if ( State$$1 ) St_Particle.__proto__ = State$$1;
-	St_Particle.prototype = Object.create( State$$1 && State$$1.prototype );
-	St_Particle.prototype.constructor = St_Particle;
+    if ( State$$1 ) StParticle.__proto__ = State$$1;
+    StParticle.prototype = Object.create( State$$1 && State$$1.prototype );
+    StParticle.prototype.constructor = StParticle;
 
-	St_Particle.prototype.onEnter = function onEnter (self/*, prev*/) {
-		var psp = new PSpriteDraw();
-		psp.alpha = 0;
-		self.drawGroup.add(psp);
-		this._alpha = 0;
-		this._psp = psp;
-	};
-	St_Particle.prototype.onUpdate = function onUpdate (self, dt) {
-		this._alpha += dt/2;
-		this._psp.advance(dt);
-		this._psp.alpha = Math.min(1, this._alpha);
-		return true;
-	};
+    StParticle.prototype.onEnter = function onEnter (self, prev) {
+        // 残像用のフレームバッファ
+        {
+            var texL = [];
+            var size = engine.size();
+            for (var i = 0; i < 2; i++) {
+                // Color
+                texL[i] = new GLTexture2D();
+                texL[i].setData(InterFormat.RGBA, size.width, size.height, InterFormat.RGBA, TexDataFormat.UB);
+            }
+            this._fb = new GLFramebuffer();
+            // Depth16
+            var rb = new GLRenderbuffer();
+            rb.allocate(RBFormat.Depth16, size.width, size.height);
+            this._fb.attach(Attachment.Depth, rb);
+            this._tex = new DataSwitch(texL[0], texL[1]);
+        }
+        var dg_m = new DrawGroup();
+        {
+            var cls = new Clear(new Vec4(0, 0, 0, 1), 1.0);
+            cls.drawtag.priority = 0;
+            dg_m.group.add(cls);
+        }
+        // パーティクル初期化
+        {
+            var psp = new PSpriteDraw(1000);
+            psp.drawtag.priority = 10;
+            psp.alpha = 0;
+            dg_m.group.add(psp);
+            this._alpha = 0;
+            this._psp = psp;
+        }
+        // 残像上書き
+        {
+            var fr = new FullRect();
+            fr.drawtag.priority = 10;
+            fr.alpha = 0.8;
+            dg_m.group.add(fr);
+            this._fr_m = fr;
+        }
+        var dg = new DrawGroup();
+        // 残像描画
+        {
+            var fbw = new FBSwitch(this._fb);
+            fbw.drawtag.priority = 0;
+            fbw.lower = dg_m;
+            dg.group.add(fbw);
+        }
+        // 結果表示
+        {
+            var fr$1 = new FullRect();
+            fr$1.drawtag.priority = 10;
+            fr$1.alpha = 1.0;
+            dg.group.add(fr$1);
+            this._fr = fr$1;
+        }
+        self.drawTarget = dg;
+    };
+    StParticle.prototype.onUpdate = function onUpdate (self, dt) {
+        this._tex.swap();
+        this._fb.attach(Attachment.Color0, this._tex.current());
+        this._fr_m.texture = this._tex.prev();
+        this._fr.texture = this._tex.current();
+        this._alpha += dt / 2;
+        this._psp.advance(dt);
+        this._psp.alpha = Math.min(1, this._alpha);
+    };
 
-	return St_Particle;
+    return StParticle;
 }(State));
-var St_Fadeout = (function (State$$1) {
-	function St_Fadeout () {
-		State$$1.apply(this, arguments);
-	}
+var StFadeout = (function (State$$1) {
+    function StFadeout () {
+        State$$1.apply(this, arguments);
+    }
 
-	if ( State$$1 ) St_Fadeout.__proto__ = State$$1;
-	St_Fadeout.prototype = Object.create( State$$1 && State$$1.prototype );
-	St_Fadeout.prototype.constructor = St_Fadeout;
+    if ( State$$1 ) StFadeout.__proto__ = State$$1;
+    StFadeout.prototype = Object.create( State$$1 && State$$1.prototype );
+    StFadeout.prototype.constructor = StFadeout;
 
-	St_Fadeout.prototype.onEnter = function onEnter () {
-		this._alpha = 1;
-	};
-	St_Fadeout.prototype.onUpdate = function onUpdate (self, dt) {
-		this._alpha -= dt;
-		self._text.alpha = this._alpha;
-		if(this._alpha < 0)
-			{ self.setState(new St_Particle()); }
-	};
+    StFadeout.prototype.onEnter = function onEnter (self, prev) {
+        this._alpha = 1;
+    };
+    StFadeout.prototype.onUpdate = function onUpdate (self, dt) {
+        this._alpha -= dt;
+        self._text.alpha = this._alpha;
+        if (this._alpha < 0)
+            { self.setState(new StParticle()); }
+    };
 
-	return St_Fadeout;
+    return StFadeout;
 }(State));
 // show "HELLO WORLD"
-var St_Text = (function (State$$1) {
-	function St_Text () {
-		State$$1.apply(this, arguments);
-	}
+var StText = (function (State$$1) {
+    function StText () {
+        State$$1.apply(this, arguments);
+    }
 
-	if ( State$$1 ) St_Text.__proto__ = State$$1;
-	St_Text.prototype = Object.create( State$$1 && State$$1.prototype );
-	St_Text.prototype.constructor = St_Text;
+    if ( State$$1 ) StText.__proto__ = State$$1;
+    StText.prototype = Object.create( State$$1 && State$$1.prototype );
+    StText.prototype.constructor = StText;
 
-	St_Text.prototype.onUp = function onUp (self) {
-		var t = new TextDraw(new Text());
-		t.priority = 10;
-		var str = "HELLO WORLD";
-		t.text.text = str;
-		t.text.size = new Size(1024, 512);
-		var rs = t.text.resultSize;
-		var w = engine.width,
-			h = engine.height;
-		t.offset = new Vec2(
-			Math.floor(w/2 - rs.width/2),
-			Math.floor(h/2 - rs.height/2)
-		);
+    StText.prototype.onUp = function onUp (self) {
+        var text = new TextLines(3);
+        var str = "HELLO WORLD\n\nfrom\nWebGL";
+        text.setText(str);
+        text.setSize(new Size(512, 512));
+        var delay = 8;
+        var t = new TextDraw(text, delay);
+        t.drawtag.priority = 10;
+        var rs = text.resultSize();
+        t.offset = PlaceCenter(engine.size(), rs);
+        self.asDrawGroup().group.add(t);
+        self._text = t;
+        var fpsc = new FPSCamera();
+        engine.sys3d().camera = fpsc.camera;
+        self.asUpdateGroup().group.add(fpsc);
+        engine.addTechnique(resource.getResource("prog"));
+        var cls = new Clear(new Vec4(0, 0, 0, 1));
+        cls.drawtag.priority = 0;
+        self.asDrawGroup().group.add(cls);
+        self.asDrawGroup().setSortAlgorithm(DrawSort.Priority);
+    };
+    StText.prototype.onUpdate = function onUpdate (self, dt) {
+        if (self._text.advance(dt * 15)) {
+            self.setState(new StFadeout());
+        }
+    };
 
-		self.drawGroup.add(t);
-		self._text = t;
-
-		self.updateGroup.add(new FPSCamera());
-		engine.addTechnique(resource.getResource("prog"));
-		self.drawGroup.add(new Clear(0));
-	};
-	St_Text.prototype.onUpdate = function onUpdate (self, dt) {
-		if(self._text.advance(dt*15)) {
-			self.setState(new St_Fadeout());
-		}
-		return true;
-	};
-
-	return St_Text;
+    return StText;
 }(State));
-window.onload = function() {
-	var alias = {
-		prog: "prog.prog",
-		vtest: "test.vsh",
-		ftest: "test.fsh",
-		valueset: "valueset.def",
-		valuesetP: "valuesetP.def",
-		vtestP: "testP.vsh",
-		ftestP: "testP.fsh",
-		textvsh: "text.vsh",
-		textfsh: "text.fsh",
-		sphere: "sphere.png",
-		textvalueset: "textvalueset.def",
-	};
-	var base = "resource";
-	var res = ["sphere", "prog"];
-	var sc = new Scene(0, new St_Text());
-	MainLoop_RF(alias, base, function (){
-		return new LoadingScene(res, sc);
-	});
+var MyScene = (function (Scene$$1) {
+    function MyScene () {
+        Scene$$1.apply(this, arguments);
+    }if ( Scene$$1 ) MyScene.__proto__ = Scene$$1;
+    MyScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
+    MyScene.prototype.constructor = MyScene;
+
+    
+
+    return MyScene;
+}(Scene));
+window.onload = function () {
+    var base = ".";
+    var res = ["sphere", "prog"];
+    var sc = new MyScene(0, new StText());
+    MainLoop_RF(Alias, base, function () {
+        return new LoadingScene(res, sc);
+    });
 };
 
 }());

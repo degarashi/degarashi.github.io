@@ -1,22 +1,24 @@
 {
-	"dependancy": [
-		"valueset", "valuesetP", "vtestP", "ftestP", "vtest", "ftest", "textvalueset", "textvsh", "textfsh"
-	],
 	"technique": {
 		"mytech": {
 			"valueset": "valueset",
-			"vshader": "vtest",
-			"fshader": "ftest"
+			"vshader": "testv",
+			"fshader": "testf"
 		},
 		"psprite": {
 			"valueset": "valuesetP",
-			"vshader": "vtestP",
-			"fshader": "ftestP"
+			"vshader": "testPv",
+			"fshader": "testPf"
 		},
 		"text": {
 			"valueset": "textvalueset",
-			"vshader": "textvsh",
-			"fshader": "textfsh"
+			"vshader": "textv",
+			"fshader": "textf"
+		},
+		"rect": {
+			"valueset": "valuesetP",
+			"vshader": "rectv",
+			"fshader": "rectf"
 		}
 	}
 }

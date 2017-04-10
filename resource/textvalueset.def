@@ -3,6 +3,7 @@
 		"Blend", "DepthTest", "DepthMask"
 	],
 	"valueset": {
-		"DepthFunc": "LessEqual"
+		"DepthFunc": "LessEqual",
+		"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha"]
 	}
 }
