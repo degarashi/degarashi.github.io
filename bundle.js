@@ -3061,6 +3061,8 @@ function MainLoop_RF(alias, base, cbMakeScene) {
         RequestAnimationFrame(Loop$$1);
         input.update();
         scene.onUpdate(1 / 60);
+        if (gl.isContextLost())
+            { return; }
         scene.onDraw();
     });
 }
@@ -4890,7 +4892,7 @@ prototypeAccessors$4.key.get = function () { return this.name; };
 
 Object.defineProperties( RPString.prototype, prototypeAccessors$4 );
 
-function MakeRect(ofs, sc) {
+function MakeRect(ofs, sc, uvnum) {
     return {
         vertex: [
             new Vec2(0, 0).addSelf(ofs),
@@ -4899,17 +4901,17 @@ function MakeRect(ofs, sc) {
             new Vec2(sc.x, 0).addSelf(ofs)
         ],
         uv: [
-            new Vec2(0, 0),
-            new Vec2(0, 1),
-            new Vec2(1, 1),
-            new Vec2(1, 0)
+            new Vec2(uvnum.x, uvnum.x),
+            new Vec2(uvnum.x, uvnum.y),
+            new Vec2(uvnum.y, uvnum.y),
+            new Vec2(uvnum.y, uvnum.x)
         ],
         index: [
             0, 1, 2, 2, 3, 0
         ]
     };
 }
-function MakeRectVI(ofs, sc) {
+function MakeRectVI(ofs, sc, uvnum) {
     var buff = {
         vbuffer: {
             a_position: new GLVBuffer(),
@@ -4917,17 +4919,20 @@ function MakeRectVI(ofs, sc) {
         },
         ibuffer: new GLIBuffer()
     };
-    var rect = MakeRect(ofs, sc);
+    var rect = MakeRect(ofs, sc, uvnum);
     buff.vbuffer.a_position.setData(rect.vertex, DrawType.Static, true);
     buff.vbuffer.a_uv.setData(rect.uv, DrawType.Static, true);
     buff.ibuffer.setDataRaw(new Uint16Array(rect.index), 1, DrawType.Static, true);
     return buff;
 }
 ResourceGenSrc.Rect05 = function (rp) {
-    return new ResourceWrap(MakeRectVI(new Vec2(-0.5, -0.5), new Vec2(1)));
+    return new ResourceWrap(MakeRectVI(new Vec2(-0.5, -0.5), new Vec2(1), new Vec2(0, 1)));
 };
 ResourceGenSrc.Rect01 = function (rp) {
-    return new ResourceWrap(MakeRectVI(new Vec2(-1), new Vec2(2)));
+    return new ResourceWrap(MakeRectVI(new Vec2(-1), new Vec2(2), new Vec2(0, 1)));
+};
+ResourceGenSrc.Rect01_01 = function (rp) {
+    return new ResourceWrap(MakeRectVI(new Vec2(-1), new Vec2(2), new Vec2(-1, 1)));
 };
 ResourceGenSrc.Trihedron = function () {
     var buff = {
@@ -4973,8 +4978,9 @@ var RPGeometry = (function (RPString$$1) {
 var FullRect = (function (DObject$$1) {
     function FullRect() {
         DObject$$1.apply(this, arguments);
-        this._rect = ResourceGen.get(new RPGeometry("Rect01"));
+        this._rect = ResourceGen.get(new RPGeometry("Rect01_01"));
         this.alpha = 1;
+        this.zoom = 1;
     }
 
     if ( DObject$$1 ) FullRect.__proto__ = DObject$$1;
@@ -4988,6 +4994,7 @@ var FullRect = (function (DObject$$1) {
         engine.setTechnique("rect");
         engine.setUniform("u_texture", this.texture);
         engine.setUniform("u_alpha", this.alpha);
+        engine.setUniform("u_zoom", 1 / this.zoom);
         engine.draw(function () {
             DrawWithGeom(this$1._rect.data, gl.TRIANGLES);
         });
@@ -5131,6 +5138,7 @@ var StParticle = (function (State$$1) {
         {
             var fr = new FullRect();
             fr.drawtag.priority = 10;
+            fr.zoom = 1.01;
             fr.alpha = 0.85;
             dg_m.group.add(fr);
             this._fr_m = fr;
