@@ -1507,6 +1507,10 @@ var Size = function Size(width, height) {
     this.width = width;
     this.height = height;
 };
+Size.prototype.equal = function equal (s) {
+    return this.width === s.width &&
+        this.height === s.height;
+};
 
 var Backup;
 (function (Backup) {
@@ -3318,7 +3322,7 @@ function Rand01() {
 }
 var Points = function Points() {
     this.position = [];
-    this.color = [];
+    this.hsv = [];
 };
 var Alg = function Alg(n) {
     this._nP = n;
@@ -3327,12 +3331,12 @@ var Alg = function Alg(n) {
 Alg.prototype.initialize = function initialize () {
     var ret = new Points();
     var vpos = ret.position;
-    var vcol = ret.color;
+    var vhsv = ret.hsv;
     var veloc = this._veloc;
     for (var i = 0; i < this._nP; i++) {
         vpos[i] = new Vec3(Rand01(), -1, Rand01());
         veloc[i] = new Vec3(Rand01(), 0.1, Rand01()).normalizeSelf();
-        vcol[i] = new Vec3(Math.random(), Math.random(), Math.random());
+        vhsv[i] = new Vec3(Math.random(), 0.8, 1);
     }
     return ret;
 };
@@ -3350,20 +3354,21 @@ var PSprite = function PSprite(alg) {
     this._alg = alg;
     this._points = alg.initialize();
     var vbc = new GLVBuffer();
-    vbc.setData(this._points.color, DrawType.Dynamic, true);
+    vbc.setData(this._points.hsv, DrawType.Dynamic, true);
     var vb = new GLVBuffer();
     vb.setData(this._points.position, DrawType.Dynamic, true);
     this._geom = {
         vbuffer: {
             a_position: vb,
-            a_color: vbc
+            a_hsv: vbc
         }
     };
+    this.hueOffset = 0;
 };
 PSprite.prototype.advance = function advance (dt) {
     this._alg.advance(this._points, dt);
     this._geom.vbuffer.a_position.setData(this._points.position, DrawType.Dynamic, true);
-    this._geom.vbuffer.a_color.setData(this._points.color, DrawType.Dynamic, true);
+    this._geom.vbuffer.a_hsv.setData(this._points.hsv, DrawType.Dynamic, true);
 };
 PSprite.prototype.draw = function draw (alpha) {
         var this$1 = this;
@@ -3373,6 +3378,7 @@ PSprite.prototype.draw = function draw (alpha) {
         { engine.setUniform("u_texture", this.texture); }
     engine.sys3d().worldMatrix = Mat44.Identity();
     engine.setUniform("u_alpha", alpha);
+    engine.setUniform("u_hue", this.hueOffset);
     engine.draw(function () { DrawWithGeom(this$1._geom, gl.POINTS); });
 };
 var PSpriteDraw = (function (DObject$$1) {
@@ -3389,6 +3395,7 @@ var PSpriteDraw = (function (DObject$$1) {
     PSpriteDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     PSpriteDraw.prototype.constructor = PSpriteDraw;
     PSpriteDraw.prototype.advance = function advance (dt) {
+        this._psprite.hueOffset += dt * 0.1;
         this._psprite.advance(dt / 2);
     };
     PSpriteDraw.prototype.onDraw = function onDraw () {
@@ -4098,11 +4105,11 @@ Rect.prototype.width = function width () {
 Rect.prototype.height = function height () {
     return this.bottom - this.top;
 };
-Rect.prototype.move = function move (ofs) {
-    this.left += ofs.x;
-    this.right += ofs.x;
-    this.top += ofs.y;
-    this.bottom += ofs.y;
+Rect.prototype.add = function add (ofs) {
+    return new Rect(this.left + ofs.x, this.top + ofs.y, this.right + ofs.x, this.bottom + ofs.y);
+};
+Rect.prototype.mul = function mul (sc) {
+    return new Rect(this.left * sc.x, this.top * sc.y, this.right * sc.x, this.bottom * sc.y);
 };
 
 // フォントテクスチャのうちの一行分
@@ -4989,21 +4996,61 @@ var FullRect = (function (DObject$$1) {
     return FullRect;
 }(DObject));
 
+// 割合による矩形指定
+var VPRatio = function VPRatio(rect) {
+    this.rect = rect;
+};
+VPRatio.prototype.getPixelRect = function getPixelRect (s) {
+    return this.rect.mul(new Vec2(s.width, s.height));
+};
+// ピクセルによる矩形指定
+var VPPixel = function VPPixel(rect) {
+    this.rect = rect;
+};
+VPPixel.prototype.getPixelRect = function getPixelRect (s) {
+    return this.rect;
+};
 var FBSwitch = (function (DObject$$1) {
     function FBSwitch(buffer) {
         DObject$$1.call(this);
         this.buffer = buffer;
+        this.setVPByRatio(new Rect(0, 0, 1, 1));
     }
 
     if ( DObject$$1 ) FBSwitch.__proto__ = DObject$$1;
     FBSwitch.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     FBSwitch.prototype.constructor = FBSwitch;
+    FBSwitch.prototype.setVPByPixel = function setVPByPixel (r) {
+        this._vpset = new VPPixel(r);
+    };
+    FBSwitch.prototype.setVPByRatio = function setVPByRatio (r) {
+        this._vpset = new VPRatio(r);
+    };
+    FBSwitch.prototype._setViewport = function _setViewport (r) {
+        gl.viewport(r.left, r.top, r.width(), r.height());
+    };
+    FBSwitch.prototype._getViewport = function _getViewport () {
+        var vpA = gl.getParameter(gl.VIEWPORT);
+        return new Rect(vpA[0], vpA[1], vpA[0] + vpA[2], vpA[1] + vpA[3]);
+    };
     FBSwitch.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        this.buffer.proc(function () {
-            this$1.lower.onDraw();
-        });
+        var c0 = this.buffer.getAttachment(Attachment.Color0);
+        if (c0) {
+            // 前のビューポートを保存しておく
+            var prev = this._getViewport();
+            {
+                var r = c0;
+                var vp = this._vpset.getPixelRect(r.size());
+                this._setViewport(vp);
+                this.buffer.proc(function () {
+                    this$1.lower.onDraw();
+                });
+            }
+            // 前のビューポートを復元
+            this._setViewport(prev);
+        }
     };
 
     return FBSwitch;
@@ -5036,35 +5083,35 @@ var DrawSort;
     };
 })(DrawSort || (DrawSort = {}));
 
-var Alias = { "common": "resource/common.glsl", "prog": "resource/prog.prog", "rectf": "resource/rectf.fsh", "rectv": "resource/rectv.vsh", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "testf": "resource/testf.fsh", "testv": "resource/testv.vsh", "textf": "resource/textf.fsh", "textv": "resource/textv.vsh", "textvalueset": "resource/textvalueset.def", "valueset": "resource/valueset.def", "valuesetP": "resource/valuesetP.def" };
+var Alias = { "common": "resource/common.glsl", "hsv": "resource/hsv.glsl", "prog": "resource/prog.prog", "rectf": "resource/rectf.fsh", "rectv": "resource/rectv.vsh", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "testf": "resource/testf.fsh", "testv": "resource/testv.vsh", "textf": "resource/textf.fsh", "textv": "resource/textv.vsh", "textvalueset": "resource/textvalueset.def", "valueset": "resource/valueset.def", "valuesetP": "resource/valuesetP.def" };
 
 // particle dance
 var StParticle = (function (State$$1) {
-    function StParticle () {
+    function StParticle() {
         State$$1.apply(this, arguments);
+        this._fb = new GLFramebuffer();
+        this._cb = [new GLTexture2D(), new GLTexture2D()];
+        this._rb = new GLRenderbuffer();
+        this._tex = new DataSwitch(this._cb[0], this._cb[1]);
     }
 
     if ( State$$1 ) StParticle.__proto__ = State$$1;
     StParticle.prototype = Object.create( State$$1 && State$$1.prototype );
     StParticle.prototype.constructor = StParticle;
+    StParticle.prototype._allocateBuffer = function _allocateBuffer (size) {
+        var this$1 = this;
 
+        this._size = size;
+        for (var i = 0; i < 2; i++) {
+            this$1._cb[i].setData(InterFormat.RGBA, size.width, size.height, InterFormat.RGBA, TexDataFormat.UB);
+        }
+        // Depth16
+        this._rb.allocate(RBFormat.Depth16, size.width, size.height);
+    };
     StParticle.prototype.onEnter = function onEnter (self, prev) {
         // 残像用のフレームバッファ
-        {
-            var texL = [];
-            var size = engine.size();
-            for (var i = 0; i < 2; i++) {
-                // Color
-                texL[i] = new GLTexture2D();
-                texL[i].setData(InterFormat.RGBA, size.width, size.height, InterFormat.RGBA, TexDataFormat.UB);
-            }
-            this._fb = new GLFramebuffer();
-            // Depth16
-            var rb = new GLRenderbuffer();
-            rb.allocate(RBFormat.Depth16, size.width, size.height);
-            this._fb.attach(Attachment.Depth, rb);
-            this._tex = new DataSwitch(texL[0], texL[1]);
-        }
+        this._allocateBuffer(engine.size());
+        this._fb.attach(Attachment.Depth, this._rb);
         var dg_m = new DrawGroup();
         {
             var cls = new Clear(new Vec4(0, 0, 0, 1), 1.0);
@@ -5084,7 +5131,7 @@ var StParticle = (function (State$$1) {
         {
             var fr = new FullRect();
             fr.drawtag.priority = 10;
-            fr.alpha = 0.8;
+            fr.alpha = 0.85;
             dg_m.group.add(fr);
             this._fr_m = fr;
         }
@@ -5107,6 +5154,10 @@ var StParticle = (function (State$$1) {
         self.drawTarget = dg;
     };
     StParticle.prototype.onUpdate = function onUpdate (self, dt) {
+        var size = engine.size();
+        if (!this._size.equal(size)) {
+            this._allocateBuffer(size);
+        }
         this._tex.swap();
         this._fb.attach(Attachment.Color0, this._tex.current());
         this._fr_m.texture = this._tex.prev();
@@ -5151,7 +5202,7 @@ var StText = (function (State$$1) {
 
     StText.prototype.onUp = function onUp (self) {
         var text = new TextLines(3);
-        var str = "HELLO WORLD\n\nfrom\nWebGL";
+        var str = "HELLO WORLD\n\nwith\nWebGL";
         text.setText(str);
         text.setSize(new Size(512, 512));
         var delay = 8;

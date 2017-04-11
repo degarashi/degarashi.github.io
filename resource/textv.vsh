@@ -1,3 +1,4 @@
+#define GLSLIFY 1
 attribute vec2 a_position;
 attribute vec4 a_uv;
 attribute float a_time;

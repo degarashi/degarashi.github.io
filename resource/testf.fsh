@@ -1,4 +1,5 @@
 precision mediump float;
+#define GLSLIFY 1
 
 varying vec4 v_color;
 varying vec2 v_uv;

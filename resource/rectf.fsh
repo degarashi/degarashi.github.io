@@ -1,4 +1,5 @@
 precision mediump float;
+#define GLSLIFY 1
 
 uniform sampler2D u_texture;
 uniform float u_alpha;
