@@ -1,0 +1,19 @@
+{
+	"technique": {
+		"psprite": {
+			"valueset": "valuesetP",
+			"vshader": "testPv",
+			"fshader": "testPf"
+		},
+		"imageview": {
+			"valueset": "imageviewVS",
+			"vshader": "imageviewv",
+			"fshader": "imageviewf"
+		},
+		"thumbview": {
+			"valueset": "imageviewVS",
+			"vshader": "thumbviewv",
+			"fshader": "thumbviewf"
+		}
+	}
+}

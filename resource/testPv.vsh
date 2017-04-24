@@ -1,3 +1,4 @@
+#version 100
 #define GLSLIFY 1
 attribute vec3 a_position;
 attribute vec3 a_hsv;
