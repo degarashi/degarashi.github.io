@@ -338,6 +338,7 @@ function JoinEntriesND(dst, src, cbDup) {
 function PlaceCenter(dstSize, srcSize) {
     return new Vec2(Math.floor(dstSize.width / 2 - srcSize.width / 2), Math.floor(dstSize.height / 2 - srcSize.height / 2));
 }
+
 function BlockPlace(dst, dstWidth, dim, px, py, src, srcWidth) {
     var srcHeight = src.length / srcWidth;
     for (var i = 0; i < srcHeight; i++) {
@@ -1555,58 +1556,6 @@ GLConst.GLTypeInfo = {};
 GLConst.Type2GLType = {};
 GLConst.ValueSetting = {};
 
-var Rect = function Rect(left, top, right, bottom) {
-    this.left = left;
-    this.top = top;
-    this.right = right;
-    this.bottom = bottom;
-};
-// 左下とサイズを指定して矩形を生成
-Rect.FromPointSize = function FromPointSize (lb, s) {
-    return Rect.FromPoints(lb, lb.add(s.toVec2()));
-};
-// 左下と右上の座標から矩形を生成
-Rect.FromPoints = function FromPoints (lb, rt) {
-    return new Rect(lb.x, rt.y, rt.x, lb.y);
-};
-Rect.prototype.shrinkAt = function shrinkAt (s, pos) {
-    return new Rect((this.left - pos.x) * s + pos.x, (this.top - pos.y) * s + pos.y, (this.right - pos.x) * s + pos.x, (this.bottom - pos.y) * s + pos.y);
-};
-// 指定の倍率で拡縮
-Rect.prototype.shrink = function shrink (s) {
-    return this.shrinkAt(s, this.center());
-};
-// 左下の座標
-Rect.prototype.lb = function lb () {
-    return new Vec2(this.left, this.bottom);
-};
-// 右上の座標
-Rect.prototype.rt = function rt () {
-    return new Vec2(this.right, this.top);
-};
-Rect.prototype.width = function width () {
-    return this.right - this.left;
-};
-Rect.prototype.height = function height () {
-    return this.top - this.bottom;
-};
-Rect.prototype.add = function add (ofs) {
-    return new Rect(this.left + ofs.x, this.top + ofs.y, this.right + ofs.x, this.bottom + ofs.y);
-};
-Rect.prototype.mul = function mul (sc) {
-    return new Rect(this.left * sc.x, this.top * sc.y, this.right * sc.x, this.bottom * sc.y);
-};
-Rect.prototype.toVec4 = function toVec4 () {
-    return new Vec4(this.left, this.top, this.right, this.bottom);
-};
-// 中心座標をベクトルで取得
-Rect.prototype.center = function center () {
-    return new Vec2((this.left + this.right) / 2, (this.top + this.bottom) / 2);
-};
-Rect.prototype.clone = function clone () {
-    return new Rect(this.left, this.top, this.right, this.bottom);
-};
-
 var Size = function Size(width, height) {
     this.width = width;
     this.height = height;
@@ -1658,6 +1607,61 @@ Size.prototype.divSelf = function divSelf (s) {
 };
 Size.prototype.clone = function clone () {
     return new Size(this.width, this.height);
+};
+
+var Rect = function Rect(left, top, right, bottom) {
+    this.left = left;
+    this.top = top;
+    this.right = right;
+    this.bottom = bottom;
+};
+// 左下とサイズを指定して矩形を生成
+Rect.FromPointSize = function FromPointSize (lb, s) {
+    return Rect.FromPoints(lb, lb.add(s.toVec2()));
+};
+// 左下と右上の座標から矩形を生成
+Rect.FromPoints = function FromPoints (lb, rt) {
+    return new Rect(lb.x, rt.y, rt.x, lb.y);
+};
+Rect.prototype.shrinkAt = function shrinkAt (s, pos) {
+    return new Rect((this.left - pos.x) * s + pos.x, (this.top - pos.y) * s + pos.y, (this.right - pos.x) * s + pos.x, (this.bottom - pos.y) * s + pos.y);
+};
+// 指定の倍率で拡縮
+Rect.prototype.shrink = function shrink (s) {
+    return this.shrinkAt(s, this.center());
+};
+// 左下の座標
+Rect.prototype.lb = function lb () {
+    return new Vec2(this.left, this.bottom);
+};
+// 右上の座標
+Rect.prototype.rt = function rt () {
+    return new Vec2(this.right, this.top);
+};
+Rect.prototype.width = function width () {
+    return this.right - this.left;
+};
+Rect.prototype.height = function height () {
+    return this.top - this.bottom;
+};
+Rect.prototype.add = function add (ofs) {
+    return new Rect(this.left + ofs.x, this.top + ofs.y, this.right + ofs.x, this.bottom + ofs.y);
+};
+Rect.prototype.mul = function mul (sc) {
+    return new Rect(this.left * sc.x, this.top * sc.y, this.right * sc.x, this.bottom * sc.y);
+};
+Rect.prototype.toSize = function toSize () {
+    return new Size(this.width(), this.height());
+};
+Rect.prototype.toVec4 = function toVec4 () {
+    return new Vec4(this.left, this.top, this.right, this.bottom);
+};
+// 中心座標をベクトルで取得
+Rect.prototype.center = function center () {
+    return new Vec2((this.left + this.right) / 2, (this.top + this.bottom) / 2);
+};
+Rect.prototype.clone = function clone () {
+    return new Rect(this.left, this.top, this.right, this.bottom);
 };
 
 var Backup;
@@ -1933,10 +1937,13 @@ var MoreResource = function MoreResource() {
 
     this.depend = arg;
 };
-function ASyncGet(loaders, maxConnection, cbComplete, cbError) {
+function ASyncGet(loaders, maxConnection, callback) {
     // ロードするリソースが空だった場合は直後にすぐonCompleteを呼ぶよう調整
     if (loaders.empty()) {
-        setTimeout(cbComplete, 0);
+        setTimeout(function () {
+            callback.progress(loaders.length, loaders.length);
+            callback.completed();
+        }, 0);
         return;
     }
     var lastCur = 0;
@@ -1947,11 +1954,17 @@ function ASyncGet(loaders, maxConnection, cbComplete, cbError) {
         Assert(cur < loaders.length);
         Assert(task[taskIndex] === null);
         task[taskIndex] = cur;
-        loaders[cur].begin(function () {
-            OnComplete(taskIndex);
-        }, function () {
-            OnError(taskIndex);
-        });
+        loaders[cur].begin({
+            completed: function () {
+                OnComplete(taskIndex);
+            },
+            progress: function (loaded, total) {
+                callback.taskprogress(taskIndex, loaded, total);
+            },
+            error: function () {
+                OnError(taskIndex);
+            }
+        }, -1);
     }
     function OnError(taskIndex) {
         // 他のタスクを全て中断
@@ -1961,23 +1974,25 @@ function ASyncGet(loaders, maxConnection, cbComplete, cbError) {
                 loaders[li].abort();
             }
         }
-        cbError(loaders[taskIndex].errormsg());
+        callback.error(loaders[taskIndex].errormsg());
     }
     function OnComplete(taskIndex) {
         Assert(typeof task[taskIndex] === "number");
         task[taskIndex] = null;
         ++nComp;
+        callback.progress(nComp, loaders.length);
         if (lastCur < loaders.length) {
             // 残りのタスクを開始
             Request(taskIndex);
         }
         else {
             if (nComp === loaders.length)
-                { cbComplete(); }
+                { callback.completed(); }
         }
     }
     for (var i = 0; i < Math.min(loaders.length, maxConnection); i++) {
         task[i] = null;
+        // 最初のタスクを開始
         Request(i);
     }
 }
@@ -2024,7 +2039,7 @@ var RState;
     State.prototype.addAlias = function addAlias (self, alias) {
         AssertF("invalid function call");
     };
-    State.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
+    State.prototype.loadFrame = function loadFrame (self, res, callback, bSame) {
         AssertF("invalid function call");
     };
     State.prototype.popFrame = function popFrame (self, n) {
@@ -2052,10 +2067,8 @@ var RState;
         IdleState.prototype.state = function state () {
             return ResState.Idle;
         };
-        IdleState.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
-            Assert(res instanceof Array
-                && cbComplete instanceof Function
-                && cbError instanceof Function);
+        IdleState.prototype.loadFrame = function loadFrame (self, res, callback, bSame) {
+            Assert(res instanceof Array);
             self._state = new RState.LoadingState();
             // 重複してるリソースはロード対象に入れない
             {
@@ -2074,6 +2087,7 @@ var RState;
             else {
                 dst = self._pushFrame();
             }
+            // リソースに応じたローダーを作成
             var loaderL = [];
             var infoL = [];
             for (var i$1 = 0; i$1 < res.length; i$1++) {
@@ -2084,49 +2098,58 @@ var RState;
                 loaderL.push(info.makeLoader(url));
                 infoL.push(info);
             }
-            var onSuccess = function () {
-                Assert(self.state() === ResState.Loading);
-                self._state = new RState.IdleState();
-                var later = [];
-                var laterId = [];
-                for (var i = 0; i < infoL.length; i++) {
-                    try {
-                        var r = infoL[i].makeResource(loaderL[i].result());
-                        dst.resource[res[i]] = r;
-                    }
-                    catch (e) {
-                        if (!(e instanceof MoreResource)) {
-                            throw e;
+            ASyncGet(loaderL, 2, {
+                completed: function () {
+                    Assert(self.state() === ResState.Loading);
+                    self._state = new RState.IdleState();
+                    // 必要なリソースが足りなくて途中で終わってしまった物を再抽出して読み込み
+                    var later = [];
+                    var laterId = [];
+                    for (var i = 0; i < infoL.length; i++) {
+                        try {
+                            var r = infoL[i].makeResource(loaderL[i].result());
+                            dst.resource[res[i]] = r;
                         }
-                        // 必要なリソースがまだ足りてなければMoreResourceが送出される
-                        var m = e;
-                        later = later.concat.apply(later, m.depend);
-                        laterId.push(i);
-                    }
-                }
-                if (!later.empty()) {
-                    // 再度リソース読み込みをかける
-                    self.loadFrame(later, function () {
-                        for (var i = 0; i < laterId.length; i++) {
-                            var id = laterId[i];
-                            var r = infoL[id].makeResource(loaderL[id].result());
-                            dst.resource[res[id]] = r;
+                        catch (e) {
+                            if (!(e instanceof MoreResource)) {
+                                throw e;
+                            }
+                            // 必要なリソースがまだ足りてなければMoreResourceが送出される
+                            var m = e;
+                            later = later.concat.apply(later, m.depend);
+                            laterId.push(i);
                         }
+                    }
+                    if (!later.empty()) {
+                        // 再度リソース読み込みをかける
+                        self.loadFrame(later, {
+                            completed: function () {
+                                for (var i = 0; i < laterId.length; i++) {
+                                    var id = laterId[i];
+                                    var r = infoL[id].makeResource(loaderL[id].result());
+                                    dst.resource[res[id]] = r;
+                                }
+                                // すべてのリソース読み込み完了
+                                callback.completed();
+                            },
+                            error: callback.error,
+                            progress: callback.progress,
+                            taskprogress: callback.taskprogress
+                        }, true);
+                    }
+                    else {
                         // すべてのリソース読み込み完了
-                        cbComplete();
-                    }, cbError, true);
-                }
-                else {
-                    // すべてのリソース読み込み完了
-                    cbComplete();
-                }
-            };
-            var onError = function (msg) {
-                Assert(self.state() === ResState.Loading);
-                self._state = new RState.IdleState();
-                cbError(msg);
-            };
-            ASyncGet(loaderL, 2, onSuccess, onError);
+                        callback.completed();
+                    }
+                },
+                error: function (msg) {
+                    Assert(self.state() === ResState.Loading);
+                    self._state = new RState.IdleState();
+                    callback.error(msg);
+                },
+                progress: callback.progress,
+                taskprogress: callback.taskprogress
+            });
         };
         IdleState.prototype.resourceLength = function resourceLength (self) {
             return self._resource.length;
@@ -2183,8 +2206,8 @@ var RState;
         RestoreingState.prototype.state = function state () {
             return ResState.Restoreing;
         };
-        RestoreingState.prototype.loadFrame = function loadFrame (self, res, cbComplete, cbError, bSame) {
-            new IdleState().loadFrame(self, res, cbComplete, cbError, bSame);
+        RestoreingState.prototype.loadFrame = function loadFrame (self, res, callback, bSame) {
+            new IdleState().loadFrame(self, res, callback, bSame);
         };
         RestoreingState.prototype.resourceLength = function resourceLength (self) {
             return self._resource.length - 1;
@@ -2224,10 +2247,10 @@ ResStack.prototype.state = function state () {
 /*
     \param[in] res ["AliasName", ...]
 */
-ResStack.prototype.loadFrame = function loadFrame (res, cbComplete, cbError, bSame) {
+ResStack.prototype.loadFrame = function loadFrame (res, callback, bSame) {
         if ( bSame === void 0 ) bSame = false;
 
-    this._state.loadFrame(this, res, cbComplete, cbError, bSame);
+    this._state.loadFrame(this, res, callback, bSame);
 };
 // リソースレイヤの数
 ResStack.prototype.resourceLength = function resourceLength () {
@@ -2487,7 +2510,6 @@ Engine.prototype.drawGeometry = function drawGeometry (geom) {
             { gl.disableVertexAttribArray(idxL[i]); }
     });
 };
-// 引数はウィンドウ座標系
 Engine.prototype.getScreenCoord = function getScreenCoord (pos) {
     pos = pos.clone();
     var s = this.size();
@@ -3231,24 +3253,25 @@ function _MainLoop(base, cbAlias, cbMakeScene) {
     SetGLRes(new GLResourceSet());
     glres.onContextRestored();
 }
-
-function MainLoop_RF(alias, base, cbMakeScene) {
+function MainLoop(alias, base, cbMakeScene) {
     _MainLoop(base, function () {
         resource.addAlias(Alias);
         resource.addAlias(alias);
     }, cbMakeScene);
-    var prev = new Date().getTime();
     RequestAnimationFrame(function Loop$$1() {
         RequestAnimationFrame(Loop$$1);
-        var now = new Date().getTime();
-        // 最大50msまでの経過時間
-        var tick = Math.min(50, now - prev);
-        prev = now;
-        input.update();
-        scene.onUpdate(tick / 1000);
         if (gl.isContextLost())
             { return; }
         scene.onDraw();
+    });
+    var loop = new Loop();
+    loop.start(60, function (tick) {
+        // 最大50msまでの経過時間
+        tick = Math.min(50, tick);
+        input.update();
+        if (!scene.onUpdate(tick)) {
+            loop.stop();
+        }
     });
 }
 
@@ -3275,12 +3298,17 @@ var St = (function (State$$1) {
     return St;
 }(State));
 var LoadingScene = (function (Scene$$1) {
-    function LoadingScene(res, nextScene) {
+    function LoadingScene(res, nextScene, cbProgress, cbTaskProgress) {
         Scene$$1.call(this, 0, new St());
-        resource.loadFrame(res, function () {
-            scene.push(nextScene, true);
-        }, function (msg) {
-            scene.pop(1, new LoadFailed(msg));
+        resource.loadFrame(res, {
+            completed: function () {
+                scene.push(nextScene(), true);
+            },
+            error: function (msg) {
+                scene.pop(1, new LoadFailed(msg));
+            },
+            progress: cbProgress || function () { },
+            taskprogress: cbTaskProgress || function () { }
         });
     }
 
@@ -3636,606 +3664,6 @@ var PSpriteDraw = (function (DObject$$1) {
     return PSpriteDraw;
 }(DObject));
 
-var XHRLoader = function XHRLoader(url, type) {
-    var this$1 = this;
-
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", url);
-    xhr.responseType = type;
-    xhr.onload = function () {
-        var xhr = this$1._xhr;
-        if (xhr.readyState === 4) {
-            if (xhr.status === 200) {
-                this$1._status = "complete";
-                this$1._cbCompleted();
-            }
-            else {
-                this$1._status = "error";
-                this$1._errormsg = xhr.statusText;
-                this$1._cbError();
-            }
-        }
-    };
-    xhr.onerror = function () {
-        this$1._errormsg = "unknown error";
-        this$1._cbError();
-    };
-    this._status = "idle";
-    this._xhr = xhr;
-};
-XHRLoader.prototype.begin = function begin (cbCompleted, cbError) {
-    this._cbCompleted = cbCompleted;
-    this._cbError = cbError;
-    this._status = "loading";
-    this._xhr.send(null);
-};
-XHRLoader.prototype.abort = function abort () {
-    this._status = "abort";
-    this._xhr.abort();
-};
-XHRLoader.prototype.errormsg = function errormsg () {
-    return this._errormsg;
-};
-XHRLoader.prototype.status = function status () {
-    return this._status;
-};
-XHRLoader.prototype.result = function result () {
-    return this._xhr.response;
-};
-
-ResourceExtToType.def = "JSON";
-ResourceInfo.JSON = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "json");
-    },
-    makeResource: function (src) {
-        return new ResourceWrap(src);
-    }
-};
-
-var ShaderError = (function (Error) {
-    function ShaderError(id) {
-        Error.call(this, "\n"
-            + PaddingString(32, "-")
-            + AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
-            + PaddingString(32, "-")
-            + "\n"
-            + gl.getShaderInfoLog(id)
-            + "\n");
-    }
-
-    if ( Error ) ShaderError.__proto__ = Error;
-    ShaderError.prototype = Object.create( Error && Error.prototype );
-    ShaderError.prototype.constructor = ShaderError;
-
-    var prototypeAccessors = { name: {} };
-    prototypeAccessors.name.get = function () {
-        return "ShaderError";
-    };
-
-    Object.defineProperties( ShaderError.prototype, prototypeAccessors );
-
-    return ShaderError;
-}(Error));
-var GLShader = function GLShader(src) {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._source = src;
-    glres.add(this);
-};
-GLShader.prototype.id = function id () {
-    return this._id;
-};
-// --------------- from GLContext ---------------
-GLShader.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-    this._rf.onContextLost(function () {
-        gl.deleteShader(this$1._id);
-        this$1._id = null;
-    });
-};
-GLShader.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        // シェーダーを読み込んでコンパイル
-        var id = gl.createShader(GLConst.ShaderTypeC.convert(this$1.typeId()));
-        gl.shaderSource(id, this$1._source);
-        gl.compileShader(id);
-        if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
-            this$1._id = id;
-        }
-        else {
-            throw new ShaderError(id);
-        }
-    });
-};
-GLShader.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
-// --------------- from Discardable ---------------
-GLShader.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-GLShader.prototype.discard = function discard () {
-    this.onContextLost();
-    this._rf.discard();
-};
-
-var GLVShader = (function (GLShader$$1) {
-    function GLVShader () {
-        GLShader$$1.apply(this, arguments);
-    }
-
-    if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
-    GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-    GLVShader.prototype.constructor = GLVShader;
-
-    GLVShader.prototype.typeId = function typeId () {
-        return ShaderType.Vertex;
-    };
-
-    return GLVShader;
-}(GLShader));
-
-var GLFShader = (function (GLShader$$1) {
-    function GLFShader () {
-        GLShader$$1.apply(this, arguments);
-    }
-
-    if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
-    GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-    GLFShader.prototype.constructor = GLFShader;
-
-    GLFShader.prototype.typeId = function typeId () {
-        return ShaderType.Fragment;
-    };
-
-    return GLFShader;
-}(GLShader));
-
-ResourceExtToType.vsh = "VertexShader";
-ResourceExtToType.fsh = "FragmentShader";
-ResourceInfo.VertexShader = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "text");
-    },
-    makeResource: function (src) {
-        return new GLVShader(src);
-    }
-};
-ResourceInfo.FragmentShader = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "text");
-    },
-    makeResource: function (src) {
-        return new GLFShader(src);
-    }
-};
-
-var ProgramError = (function (Error) {
-    function ProgramError(id) {
-        Error.call(this, gl.getProgramInfoLog(id));
-    }
-
-    if ( Error ) ProgramError.__proto__ = Error;
-    ProgramError.prototype = Object.create( Error && Error.prototype );
-    ProgramError.prototype.constructor = ProgramError;
-
-    var prototypeAccessors = { name: {} };
-    prototypeAccessors.name.get = function () {
-        return "ProgramError";
-    };
-
-    Object.defineProperties( ProgramError.prototype, prototypeAccessors );
-
-    return ProgramError;
-}(Error));
-var GLProgram = function GLProgram(vs, fs) {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._bBind = false;
-    this._vs = vs;
-    this._fs = fs;
-    glres.add(this);
-};
-GLProgram.prototype.id = function id () {
-    return this._id;
-};
-GLProgram.prototype.hasUniform = function hasUniform (name) {
-    return this._uniform[name] !== undefined;
-};
-/*!
-    \param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
-*/
-GLProgram.prototype.setUniform = function setUniform (name, value) {
-    var u = this._uniform[name];
-    if (u) {
-        Assert(!(value instanceof Array));
-        var f = u.type.uniformF;
-        var fa = u.type.uniformAF;
-        // matrix or vector or float or int
-        if (IsMatrix(value))
-            { fa.call(gl, u.index, false, value.value); }
-        else if (IsVector(value))
-            { fa.call(gl, u.index, value.value); }
-        else
-            { f.call(gl, u.index, value); }
-        return;
-    }
-    u = this._uniform[name + "[0]"];
-    if (u) {
-        Assert(value instanceof Array);
-        var fa$1 = u.type.uniformAF;
-        if (IsVM(value[0])) {
-            // [matrix...] or [vector...]
-            var ar = value;
-            fa$1.call(gl, u.index, VMToArray(ar));
-        }
-        else {
-            fa$1.call(gl, u.index, value);
-        }
-    }
-};
-/*!
-    \param[in] data	[vector...] or GLVBuffer
-*/
-GLProgram.prototype.setVStream = function setVStream (name, data) {
-    var a = this._attribute[name];
-    if (a) {
-        if (data instanceof Array) {
-            // [vector...]
-            a.type.vertexF(a.index, VectorToArray.apply(void 0, data));
-        }
-        else {
-            var data2 = data;
-            // GLVBuffer
-            data2.proc(function () {
-                gl.enableVertexAttribArray(a.index);
-                var info = data2.typeinfo();
-                gl.vertexAttribPointer(a.index, data2.dim(), info.id, false, info.bytesize * data2.dim(), 0);
-            });
-        }
-        return a.index;
-    }
-};
-// ------------- from Bindable -------------
-GLProgram.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(!this._bBind, "already binded");
-    gl.useProgram(this.id());
-    this._bBind = true;
-};
-GLProgram.prototype.unbind = function unbind (id) {
-        if ( id === void 0 ) id = null;
-
-    Assert(this._bBind, "not binding anywhere");
-    gl.useProgram(id);
-    this._bBind = false;
-};
-GLProgram.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(gl.CURRENT_PROGRAM);
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// ------------- from Discardable -------------
-GLProgram.prototype.discard = function discard () {
-    Assert(!this._bBind);
-    this.onContextLost();
-    this._rf.discard();
-};
-GLProgram.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-// ------------- from GLContext -------------
-GLProgram.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-    this._rf.onContextLost(function () {
-        gl.deleteProgram(this$1.id());
-        this$1._id = null;
-    });
-};
-GLProgram.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        if (this$1._vs.contextLost())
-            { this$1._vs.onContextRestored(); }
-        if (this$1._fs.contextLost())
-            { this$1._fs.onContextRestored(); }
-        var prog = gl.createProgram();
-        gl.attachShader(prog, this$1._vs.id());
-        gl.attachShader(prog, this$1._fs.id());
-        gl.linkProgram(prog);
-        if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-            this$1._id = prog;
-        }
-        else
-            { throw new ProgramError(prog); }
-        {
-            var attr = {};
-            var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
-            for (var i = 0; i < nAtt; i++) {
-                var a = gl.getActiveAttrib(prog, i);
-                var typ = GLConst.GLSLTypeInfo[a.type];
-                attr[a.name] = {
-                    index: gl.getAttribLocation(prog, a.name),
-                    size: a.size,
-                    type: typ
-                };
-                Assert(attr[a.name].type !== undefined);
-            }
-            this$1._attribute = attr;
-        }
-        {
-            var unif = {};
-            var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
-            for (var i$1 = 0; i$1 < nUnif; i$1++) {
-                var u = gl.getActiveUniform(prog, i$1);
-                unif[u.name] = {
-                    index: gl.getUniformLocation(prog, u.name),
-                    size: u.size,
-                    type: GLConst.GLSLTypeInfo[u.type]
-                };
-                Assert(unif[u.name].type !== undefined);
-            }
-            this$1._uniform = unif;
-        }
-    });
-};
-GLProgram.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
-
-function ToLowercaseKeys(ar) {
-    var ret = {};
-    Object.keys(ar).forEach(function (k) {
-        var val = ar[k];
-        if (typeof val === "string")
-            { val = val.toLowerCase(); }
-        else if (val instanceof Array) {
-            for (var i = 0; i < val.length; i++) {
-                if (typeof val[i] === "string")
-                    { val[i] = val[i].toLowerCase(); }
-            }
-        }
-        ret[k.toLowerCase()] = val;
-    });
-    return ret;
-}
-var GLValueSet = function GLValueSet () {};
-
-GLValueSet.FromJSON = function FromJSON (js) {
-    var ret = new GLValueSet();
-    var bs = js.boolset;
-    var bsf = {};
-    for (var i = 0; i < bs.length; i++) {
-        bsf[bs[i]] = true;
-    }
-    ret._boolset = ToLowercaseKeys(bsf);
-    ret._valueset = ToLowercaseKeys(js.valueset);
-    return ret;
-};
-GLValueSet.prototype.enable = function enable (name) {
-    this._boolset[name] = true;
-};
-GLValueSet.prototype.disable = function disable (name) {
-    delete this._boolset[name];
-};
-GLValueSet.prototype.apply = function apply () {
-        var this$1 = this;
-
-    // boolset
-    for (var i = 0; i < BoolString.length; i++) {
-        var key = BoolString[i];
-        var func = (this$1._boolset[key] === true) ? gl.enable : gl.disable;
-        func.call(gl, GLConst.BoolSettingC.convert(i + 34359738368 /* Num */));
-    }
-    // valueset
-    for (var k in this$1._valueset) {
-        var args = this$1._valueset[k];
-        var func$1 = GLConst.ValueSetting[k];
-        if (args instanceof Array)
-            { func$1.call(gl, args[0], args[1], args[2], args[3]); }
-        else
-            { func$1.call(gl, args); }
-    }
-};
-
-/// <reference path="arrayfunc.ts" />
-var Technique = (function (ResourceWrap$$1) {
-    function Technique(src) {
-        ResourceWrap$$1.call(this, null);
-        // 必要なリソースが揃っているかのチェック
-        var later = this._checkResource(src);
-        if (!later.empty())
-            { throw new (Function.prototype.bind.apply( MoreResource, [ null ].concat( later) )); }
-        // 実際のローディング
-        this._loadResource(src);
-    }
-
-    if ( ResourceWrap$$1 ) Technique.__proto__ = ResourceWrap$$1;
-    Technique.prototype = Object.create( ResourceWrap$$1 && ResourceWrap$$1.prototype );
-    Technique.prototype.constructor = Technique;
-    Technique.prototype._checkResource = function _checkResource (src) {
-        var later = [];
-        Object.keys(src.technique).forEach(function (k) {
-            var v = src.technique[k];
-            var chk = function (key) {
-                if (!resource.checkResource(key))
-                    { later.push(key); }
-            };
-            chk(v.valueset);
-            chk(v.vshader);
-            chk(v.fshader);
-        });
-        return later;
-    };
-    Technique.prototype._loadResource = function _loadResource (src) {
-        var tech = {};
-        Object.keys(src.technique).forEach(function (k) {
-            var v = src.technique[k];
-            tech[k] = {
-                valueset: GLValueSet.FromJSON(resource.getResource(v.valueset).data),
-                program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
-            };
-        });
-        this._tech = tech;
-    };
-
-    Technique.prototype.technique = function technique () {
-        return this._tech;
-    };
-
-    return Technique;
-}(ResourceWrap));
-
-ResourceExtToType.prog = "Technique";
-ResourceInfo.Technique = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "json");
-    },
-    makeResource: function (src) {
-        return new Technique(src);
-    }
-};
-
-var ImageLoader = function ImageLoader(url) {
-    var this$1 = this;
-
-    var img = new Image();
-    img.onload = function () {
-        this$1._timerId = null;
-        this$1._status = "complete";
-        this$1._cbCompleted();
-    };
-    this._url = url;
-    this._img = img;
-    this._status = "idle";
-};
-ImageLoader.prototype.begin = function begin (cbCompleted, cbError) {
-        var this$1 = this;
-
-    this._timerId = setTimeout(function () {
-        if (this$1._timerId) {
-            // timeout
-            this$1._status = "error";
-            this$1._errormsg = "connection timedout";
-            this$1._cbError();
-        }
-    }, 5000);
-    this._cbCompleted = cbCompleted;
-    this._cbError = cbError;
-    this._img.src = this._url;
-    this._status = "loading";
-};
-ImageLoader.prototype.abort = function abort () {
-    // 非対応
-    this._status = "abort";
-};
-ImageLoader.prototype.errormsg = function errormsg () {
-    return this._errormsg;
-};
-ImageLoader.prototype.status = function status () {
-    return this._status;
-};
-ImageLoader.prototype.result = function result () {
-    return this._img;
-};
-
-var GLTexture2D = (function (GLTexture$$1) {
-    function GLTexture2D () {
-        GLTexture$$1.apply(this, arguments);
-    }
-
-    if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
-    GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
-    GLTexture2D.prototype.constructor = GLTexture2D;
-
-    GLTexture2D.prototype.typeId = function typeId () {
-        return TextureType.Texture2D;
-    };
-    GLTexture2D.prototype.typeQueryId = function typeQueryId () {
-        return TextureQuery.Texture2D;
-    };
-
-    return GLTexture2D;
-}(GLTexture));
-
-ResourceExtToType.png = "Image";
-ResourceExtToType.jpg = "Image";
-ResourceInfo.Image = {
-    makeLoader: function (url) {
-        return new ImageLoader(url);
-    },
-    makeResource: function (src) {
-        var tex = new GLTexture2D();
-        tex.setImage(InterFormat.RGBA, InterFormat.RGBA, TexDataFormat.UB, src);
-        return tex;
-    }
-};
-
-var Range = function Range(from, to) {
-    this.from = from;
-    this.to = to;
-};
-Range.prototype.width = function width () {
-    return this.to - this.from;
-};
-Range.prototype.move = function move (ofs) {
-    this.from += ofs;
-    this.to += ofs;
-};
-
-var LinearTimer = function LinearTimer(init, end) {
-    this.cur = 0;
-    this.range = new Range(0, 0);
-    this.range.from = init;
-    this.range.to = end;
-};
-LinearTimer.prototype.reset = function reset () {
-    this.cur = this.range.from;
-};
-LinearTimer.prototype.get = function get () {
-    return this.cur;
-};
-LinearTimer.prototype.advance = function advance (dt) {
-    if (this.cur >= this.range.to) {
-        return true;
-    }
-    this.cur += dt;
-    return false;
-};
-
-var TextDraw = (function (DObject$$1) {
-    function TextDraw(text, delay) {
-        DObject$$1.call(this);
-        this._text = text;
-        this.timer = new LinearTimer(0, text.length() + delay);
-        this.offset = new Vec2(0, 0);
-        this.alpha = 1;
-        this.delay = delay;
-    }
-
-    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
-    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    TextDraw.prototype.constructor = TextDraw;
-    TextDraw.prototype.advance = function advance (dt) {
-        return this.timer.advance(dt);
-    };
-    TextDraw.prototype.onDraw = function onDraw () {
-        engine.setTechnique("text");
-        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
-    };
-
-    return TextDraw;
-}(DObject));
-
 var Font = (function () {
     function anonymous(family, size, weight, italic) {
         this.family = family;
@@ -4244,8 +3672,22 @@ var Font = (function () {
         this.italic = italic;
     }
     anonymous.prototype.fontstr = function fontstr () {
-        var italic = this.italic ? "italic" : "";
-        return (italic + " " + (this.weight) + " " + (this.size) + " " + (this.family));
+        var this$1 = this;
+
+        var res = "";
+        if (this.italic)
+            { res += "italic"; }
+        var add = function (ent) {
+            var val = this$1[ent];
+            if (val) {
+                res += " ";
+                res += String(val);
+            }
+        };
+        add("weight");
+        add("size");
+        add("family");
+        return res;
     };
 
     return anonymous;
@@ -4279,6 +3721,18 @@ var RP_FontCtx = (function (RPWebGLCtx$$1) {
 
     return anonymous;
 }(RPWebGLCtx));
+
+var Range = function Range(from, to) {
+    this.from = from;
+    this.to = to;
+};
+Range.prototype.width = function width () {
+    return this.to - this.from;
+};
+Range.prototype.move = function move (ofs) {
+    this.from += ofs;
+    this.to += ofs;
+};
 
 ResourceGenSrc.FontHeight = function (rp) {
     var c = ResourceGen.get(new RP_FontCtx("fontcanvas"));
@@ -4314,7 +3768,7 @@ ResourceGenSrc.FontHeight = function (rp) {
             }
         }
     }
-    return new ResourceWrap(new Range(top, bottom + 1));
+    return new ResourceWrap(new Range(top, bottom + 1 + top));
 };
 var RPFontHeight = function RPFontHeight(font) {
     this.font = font;
@@ -4327,6 +3781,25 @@ prototypeAccessors$3.key.get = function () {
 };
 
 Object.defineProperties( RPFontHeight.prototype, prototypeAccessors$3 );
+
+var GLTexture2D = (function (GLTexture$$1) {
+    function GLTexture2D () {
+        GLTexture$$1.apply(this, arguments);
+    }
+
+    if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
+    GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
+    GLTexture2D.prototype.constructor = GLTexture2D;
+
+    GLTexture2D.prototype.typeId = function typeId () {
+        return TextureType.Texture2D;
+    };
+    GLTexture2D.prototype.typeQueryId = function typeQueryId () {
+        return TextureQuery.Texture2D;
+    };
+
+    return GLTexture2D;
+}(GLTexture));
 
 // フォントテクスチャのうちの一行分
 var FontLane = function FontLane(w) {
@@ -4886,6 +4359,578 @@ Text.prototype.draw = function draw (offset, time, timeDelay, alpha) {
 };
 
 Text.Tag = Tag;
+
+var XHRLoader = function XHRLoader(url, type) {
+    var this$1 = this;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = type;
+    xhr.onprogress = function (e) {
+        if (e.lengthComputable) {
+            this$1._cb.progress(e.loaded, e.total);
+            this$1._loaded = e.loaded;
+            this$1._total = e.total;
+        }
+    };
+    xhr.onload = function () {
+        var xhr = this$1._xhr;
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                this$1._status = "complete";
+                this$1._cb.progress((this$1._loaded >= 0) ? this$1._total : 0, this$1._total);
+                this$1._cb.completed();
+            }
+            else {
+                this$1._status = "error";
+                this$1._errormsg = xhr.statusText;
+                this$1._cb.error();
+            }
+        }
+    };
+    xhr.ontimeout = function (e) {
+        this$1._errormsg = "timeout";
+        this$1._cb.error();
+    };
+    xhr.onerror = function () {
+        this$1._errormsg = "unknown error";
+        this$1._cb.error();
+    };
+    this._status = "idle";
+    this._xhr = xhr;
+};
+XHRLoader.prototype.begin = function begin (callback, timeout) {
+    this._cb = callback;
+    this._status = "loading";
+    this._xhr.timeout = timeout;
+    this._loaded = 0;
+    this._total = 0;
+    callback.progress(this._loaded, this._total);
+    this._xhr.send(null);
+};
+XHRLoader.prototype.abort = function abort () {
+    this._status = "abort";
+    this._xhr.abort();
+};
+XHRLoader.prototype.errormsg = function errormsg () {
+    return this._errormsg;
+};
+XHRLoader.prototype.status = function status () {
+    return this._status;
+};
+XHRLoader.prototype.result = function result () {
+    return this._xhr.response;
+};
+
+ResourceExtToType.def = "JSON";
+ResourceInfo.JSON = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new ResourceWrap(src);
+    }
+};
+
+var ShaderError = (function (Error) {
+    function ShaderError(id) {
+        Error.call(this, "\n"
+            + PaddingString(32, "-")
+            + AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
+            + PaddingString(32, "-")
+            + "\n"
+            + gl.getShaderInfoLog(id)
+            + "\n");
+    }
+
+    if ( Error ) ShaderError.__proto__ = Error;
+    ShaderError.prototype = Object.create( Error && Error.prototype );
+    ShaderError.prototype.constructor = ShaderError;
+
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ShaderError";
+    };
+
+    Object.defineProperties( ShaderError.prototype, prototypeAccessors );
+
+    return ShaderError;
+}(Error));
+var GLShader = function GLShader(src) {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._source = src;
+    glres.add(this);
+};
+GLShader.prototype.id = function id () {
+    return this._id;
+};
+// --------------- from GLContext ---------------
+GLShader.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+    this._rf.onContextLost(function () {
+        gl.deleteShader(this$1._id);
+        this$1._id = null;
+    });
+};
+GLShader.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+    this._rf.onContextRestored(function () {
+        // シェーダーを読み込んでコンパイル
+        var id = gl.createShader(GLConst.ShaderTypeC.convert(this$1.typeId()));
+        gl.shaderSource(id, this$1._source);
+        gl.compileShader(id);
+        if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
+            this$1._id = id;
+        }
+        else {
+            throw new ShaderError(id);
+        }
+    });
+};
+GLShader.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+// --------------- from Discardable ---------------
+GLShader.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+GLShader.prototype.discard = function discard () {
+    this.onContextLost();
+    this._rf.discard();
+};
+
+var GLVShader = (function (GLShader$$1) {
+    function GLVShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
+    GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLVShader.prototype.constructor = GLVShader;
+
+    GLVShader.prototype.typeId = function typeId () {
+        return ShaderType.Vertex;
+    };
+
+    return GLVShader;
+}(GLShader));
+
+var GLFShader = (function (GLShader$$1) {
+    function GLFShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
+    GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLFShader.prototype.constructor = GLFShader;
+
+    GLFShader.prototype.typeId = function typeId () {
+        return ShaderType.Fragment;
+    };
+
+    return GLFShader;
+}(GLShader));
+
+ResourceExtToType.vsh = "VertexShader";
+ResourceExtToType.fsh = "FragmentShader";
+ResourceInfo.VertexShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLVShader(src);
+    }
+};
+ResourceInfo.FragmentShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLFShader(src);
+    }
+};
+
+var ProgramError = (function (Error) {
+    function ProgramError(id) {
+        Error.call(this, gl.getProgramInfoLog(id));
+    }
+
+    if ( Error ) ProgramError.__proto__ = Error;
+    ProgramError.prototype = Object.create( Error && Error.prototype );
+    ProgramError.prototype.constructor = ProgramError;
+
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ProgramError";
+    };
+
+    Object.defineProperties( ProgramError.prototype, prototypeAccessors );
+
+    return ProgramError;
+}(Error));
+var GLProgram = function GLProgram(vs, fs) {
+    this._rf = new GLResourceFlag();
+    this._id = null;
+    this._bBind = false;
+    this._vs = vs;
+    this._fs = fs;
+    glres.add(this);
+};
+GLProgram.prototype.id = function id () {
+    return this._id;
+};
+GLProgram.prototype.hasUniform = function hasUniform (name) {
+    return this._uniform[name] !== undefined;
+};
+/*!
+    \param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
+*/
+GLProgram.prototype.setUniform = function setUniform (name, value) {
+    var u = this._uniform[name];
+    if (u) {
+        Assert(!(value instanceof Array));
+        var f = u.type.uniformF;
+        var fa = u.type.uniformAF;
+        // matrix or vector or float or int
+        if (IsMatrix(value))
+            { fa.call(gl, u.index, false, value.value); }
+        else if (IsVector(value))
+            { fa.call(gl, u.index, value.value); }
+        else
+            { f.call(gl, u.index, value); }
+        return;
+    }
+    u = this._uniform[name + "[0]"];
+    if (u) {
+        Assert(value instanceof Array);
+        var fa$1 = u.type.uniformAF;
+        if (IsVM(value[0])) {
+            // [matrix...] or [vector...]
+            var ar = value;
+            fa$1.call(gl, u.index, VMToArray(ar));
+        }
+        else {
+            fa$1.call(gl, u.index, value);
+        }
+    }
+};
+/*!
+    \param[in] data	[vector...] or GLVBuffer
+*/
+GLProgram.prototype.setVStream = function setVStream (name, data) {
+    var a = this._attribute[name];
+    if (a) {
+        if (data instanceof Array) {
+            // [vector...]
+            a.type.vertexF(a.index, VectorToArray.apply(void 0, data));
+        }
+        else {
+            var data2 = data;
+            // GLVBuffer
+            data2.proc(function () {
+                gl.enableVertexAttribArray(a.index);
+                var info = data2.typeinfo();
+                gl.vertexAttribPointer(a.index, data2.dim(), info.id, false, info.bytesize * data2.dim(), 0);
+            });
+        }
+        return a.index;
+    }
+};
+// ------------- from Bindable -------------
+GLProgram.prototype.bind = function bind () {
+    Assert(!this.isDiscarded(), "already discarded");
+    Assert(!this._bBind, "already binded");
+    gl.useProgram(this.id());
+    this._bBind = true;
+};
+GLProgram.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+    Assert(this._bBind, "not binding anywhere");
+    gl.useProgram(id);
+    this._bBind = false;
+};
+GLProgram.prototype.proc = function proc (cb) {
+    if (this.contextLost())
+        { return; }
+    var prev = gl.getParameter(gl.CURRENT_PROGRAM);
+    this.bind();
+    cb();
+    this.unbind(prev);
+};
+// ------------- from Discardable -------------
+GLProgram.prototype.discard = function discard () {
+    Assert(!this._bBind);
+    this.onContextLost();
+    this._rf.discard();
+};
+GLProgram.prototype.isDiscarded = function isDiscarded () {
+    return this._rf.isDiscarded();
+};
+// ------------- from GLContext -------------
+GLProgram.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+    this._rf.onContextLost(function () {
+        gl.deleteProgram(this$1.id());
+        this$1._id = null;
+    });
+};
+GLProgram.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+    this._rf.onContextRestored(function () {
+        if (this$1._vs.contextLost())
+            { this$1._vs.onContextRestored(); }
+        if (this$1._fs.contextLost())
+            { this$1._fs.onContextRestored(); }
+        var prog = gl.createProgram();
+        gl.attachShader(prog, this$1._vs.id());
+        gl.attachShader(prog, this$1._fs.id());
+        gl.linkProgram(prog);
+        if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+            this$1._id = prog;
+        }
+        else
+            { throw new ProgramError(prog); }
+        {
+            var attr = {};
+            var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
+            for (var i = 0; i < nAtt; i++) {
+                var a = gl.getActiveAttrib(prog, i);
+                var typ = GLConst.GLSLTypeInfo[a.type];
+                attr[a.name] = {
+                    index: gl.getAttribLocation(prog, a.name),
+                    size: a.size,
+                    type: typ
+                };
+                Assert(attr[a.name].type !== undefined);
+            }
+            this$1._attribute = attr;
+        }
+        {
+            var unif = {};
+            var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+            for (var i$1 = 0; i$1 < nUnif; i$1++) {
+                var u = gl.getActiveUniform(prog, i$1);
+                unif[u.name] = {
+                    index: gl.getUniformLocation(prog, u.name),
+                    size: u.size,
+                    type: GLConst.GLSLTypeInfo[u.type]
+                };
+                Assert(unif[u.name].type !== undefined);
+            }
+            this$1._uniform = unif;
+        }
+    });
+};
+GLProgram.prototype.contextLost = function contextLost () {
+    return this._rf.contextLost();
+};
+
+function ToLowercaseKeys(ar) {
+    var ret = {};
+    Object.keys(ar).forEach(function (k) {
+        var val = ar[k];
+        if (typeof val === "string")
+            { val = val.toLowerCase(); }
+        else if (val instanceof Array) {
+            for (var i = 0; i < val.length; i++) {
+                if (typeof val[i] === "string")
+                    { val[i] = val[i].toLowerCase(); }
+            }
+        }
+        ret[k.toLowerCase()] = val;
+    });
+    return ret;
+}
+var GLValueSet = function GLValueSet () {};
+
+GLValueSet.FromJSON = function FromJSON (js) {
+    var ret = new GLValueSet();
+    var bs = js.boolset;
+    var bsf = {};
+    for (var i = 0; i < bs.length; i++) {
+        bsf[bs[i]] = true;
+    }
+    ret._boolset = ToLowercaseKeys(bsf);
+    ret._valueset = ToLowercaseKeys(js.valueset);
+    return ret;
+};
+GLValueSet.prototype.enable = function enable (name) {
+    this._boolset[name] = true;
+};
+GLValueSet.prototype.disable = function disable (name) {
+    delete this._boolset[name];
+};
+GLValueSet.prototype.apply = function apply () {
+        var this$1 = this;
+
+    // boolset
+    for (var i = 0; i < BoolString.length; i++) {
+        var key = BoolString[i];
+        var func = (this$1._boolset[key] === true) ? gl.enable : gl.disable;
+        func.call(gl, GLConst.BoolSettingC.convert(i + 34359738368 /* Num */));
+    }
+    // valueset
+    for (var k in this$1._valueset) {
+        var args = this$1._valueset[k];
+        var func$1 = GLConst.ValueSetting[k];
+        if (args instanceof Array)
+            { func$1.call(gl, args[0], args[1], args[2], args[3]); }
+        else
+            { func$1.call(gl, args); }
+    }
+};
+
+/// <reference path="arrayfunc.ts" />
+var Technique = (function (ResourceWrap$$1) {
+    function Technique(src) {
+        ResourceWrap$$1.call(this, null);
+        // 必要なリソースが揃っているかのチェック
+        var later = this._checkResource(src);
+        if (!later.empty())
+            { throw new (Function.prototype.bind.apply( MoreResource, [ null ].concat( later) )); }
+        // 実際のローディング
+        this._loadResource(src);
+    }
+
+    if ( ResourceWrap$$1 ) Technique.__proto__ = ResourceWrap$$1;
+    Technique.prototype = Object.create( ResourceWrap$$1 && ResourceWrap$$1.prototype );
+    Technique.prototype.constructor = Technique;
+    Technique.prototype._checkResource = function _checkResource (src) {
+        var later = [];
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            var chk = function (key) {
+                if (!resource.checkResource(key))
+                    { later.push(key); }
+            };
+            chk(v.valueset);
+            chk(v.vshader);
+            chk(v.fshader);
+        });
+        return later;
+    };
+    Technique.prototype._loadResource = function _loadResource (src) {
+        var tech = {};
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            tech[k] = {
+                valueset: GLValueSet.FromJSON(resource.getResource(v.valueset).data),
+                program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
+            };
+        });
+        this._tech = tech;
+    };
+
+    Technique.prototype.technique = function technique () {
+        return this._tech;
+    };
+
+    return Technique;
+}(ResourceWrap));
+
+ResourceExtToType.prog = "Technique";
+ResourceInfo.Technique = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new Technique(src);
+    }
+};
+
+var ImageLoader = (function (XHRLoader$$1) {
+    function ImageLoader(url) {
+        XHRLoader$$1.call(this, url, "blob");
+    }
+
+    if ( XHRLoader$$1 ) ImageLoader.__proto__ = XHRLoader$$1;
+    ImageLoader.prototype = Object.create( XHRLoader$$1 && XHRLoader$$1.prototype );
+    ImageLoader.prototype.constructor = ImageLoader;
+    ImageLoader.prototype.begin = function begin (callback, timeout) {
+        var this$1 = this;
+
+        XHRLoader$$1.prototype.begin.call(this, {
+            completed: function () {
+                var img = new Image();
+                this$1._img = img;
+                img.src = window.URL.createObjectURL(XHRLoader$$1.prototype.result.call(this$1));
+                img.onload = function () {
+                    callback.completed();
+                };
+            },
+            error: callback.error,
+            progress: callback.progress
+        }, timeout);
+    };
+    ImageLoader.prototype.result = function result () {
+        return this._img;
+    };
+
+    return ImageLoader;
+}(XHRLoader));
+
+ResourceExtToType.png = "Image";
+ResourceExtToType.jpg = "Image";
+ResourceInfo.Image = {
+    makeLoader: function (url) {
+        return new ImageLoader(url);
+    },
+    makeResource: function (src) {
+        var tex = new GLTexture2D();
+        tex.setImage(InterFormat.RGBA, InterFormat.RGBA, TexDataFormat.UB, src);
+        return tex;
+    }
+};
+
+var LinearTimer = function LinearTimer(init, end) {
+    this.cur = 0;
+    this.range = new Range(0, 0);
+    this.range.from = init;
+    this.range.to = end;
+};
+LinearTimer.prototype.reset = function reset () {
+    this.cur = this.range.from;
+};
+LinearTimer.prototype.get = function get () {
+    return this.cur;
+};
+LinearTimer.prototype.advance = function advance (dt) {
+    if (this.cur >= this.range.to) {
+        return true;
+    }
+    this.cur += dt;
+    return false;
+};
+
+var TextDraw = (function (DObject$$1) {
+    function TextDraw(text, delay) {
+        DObject$$1.call(this);
+        this._text = text;
+        this.timer = new LinearTimer(0, text.length() + delay);
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+        this.delay = delay;
+    }
+
+    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
+    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextDraw.prototype.constructor = TextDraw;
+    TextDraw.prototype.advance = function advance (dt) {
+        return this.timer.advance(dt);
+    };
+    TextDraw.prototype.onDraw = function onDraw () {
+        engine.setTechnique("text");
+        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
+    };
+
+    return TextDraw;
+}(DObject));
 
 var TextLines = (function (Text$$1) {
     function TextLines(lineDelay) {
@@ -5930,7 +5975,9 @@ var StParticle = (function (State$$1) {
             if (typeof ret === "number") {
                 var key = Object.keys(Alias$4);
                 var res = key[ret];
-                scene.push(new LoadingScene([res], new View(res)), false);
+                scene.push(new LoadingScene([res], function () { return new View(res); }, undefined, function (taskIndex, loadedBytes, totalBytes) {
+                    console.log((loadedBytes + " / " + totalBytes));
+                }), false);
                 return;
             }
         }
@@ -6021,20 +6068,76 @@ var MyScene = (function (Scene$$1) {
 
     return MyScene;
 }(Scene));
+var TextShow = (function (DObject$$1) {
+    function TextShow() {
+        DObject$$1.apply(this, arguments);
+        this.text = new Text();
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+    }
+
+    if ( DObject$$1 ) TextShow.__proto__ = DObject$$1;
+    TextShow.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextShow.prototype.constructor = TextShow;
+    TextShow.prototype.onDraw = function onDraw () {
+        engine.setTechnique("text");
+        this.text.draw(this.offset, 0, 0, this.alpha);
+    };
+
+    return TextShow;
+}(DObject));
+var MyLoading = (function (LoadingScene$$1) {
+    function MyLoading(res, cbNext) {
+        var this$1 = this;
+
+        LoadingScene$$1.call(this, res, cbNext, function (loaded, total) {
+            this$1._loaded = loaded;
+            this$1._total = total;
+        }, function (id, loaded, total) {
+            console.log(("task:" + id + " [" + loaded + " / " + total + "]"));
+        });
+        var t = new TextShow();
+        var tx = t.text;
+        tx.setText("loading... [000/000]");
+        tx.setSize(new Size(512, 512));
+        tx.setFont(new Font("arial", "2em", "normal", false));
+        t.drawtag.priority = 10;
+        t.offset = PlaceCenter(engine.size(), tx.resultSize());
+        this.asDrawGroup().group.add(t);
+        this._text = t;
+        this._loaded = 0;
+        this._total = 0;
+    }
+
+    if ( LoadingScene$$1 ) MyLoading.__proto__ = LoadingScene$$1;
+    MyLoading.prototype = Object.create( LoadingScene$$1 && LoadingScene$$1.prototype );
+    MyLoading.prototype.constructor = MyLoading;
+    MyLoading.prototype.onUpdate = function onUpdate (dt) {
+        this._text.text.setText(("loading... [" + (this._loaded) + "/" + (this._total) + "]"));
+        return LoadingScene$$1.prototype.onUpdate.call(this, dt);
+    };
+
+    return MyLoading;
+}(LoadingScene));
 window.onload = function () {
-    var alias = {};
     var onError = function (name) {
         throw Error(("duplicate resource \"" + name + "\""));
     };
+    var alias = {};
     JoinEntriesND(alias, Alias$2, onError);
     JoinEntriesND(alias, Alias$4, onError);
     JoinEntriesND(alias, Alias$5, onError);
-    var base = ".";
-    MainLoop_RF(alias, base, function () {
-        var res = ["sphere", "prog", "ps"];
-        var keys = Object.keys(Alias$5);
-        res = res.concat(keys);
-        return new LoadingScene(res, new MyScene());
+    MainLoop(alias, ".", function () {
+        return new LoadingScene(["prog"], function () {
+            engine.addTechnique(resource.getResource("prog"));
+            var res = ["sphere", "ps"];
+            var keys = Object.keys(Alias$5);
+            res = res.concat(keys);
+            return new MyLoading(res, function () {
+                engine.addTechnique(resource.getResource("ps"));
+                return new MyScene();
+            });
+        });
     });
 };
 
