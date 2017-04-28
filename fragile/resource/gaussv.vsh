@@ -1,7 +1,7 @@
 #version 100
+#define VShader
 precision mediump float;
 #define GLSLIFY 1
-#define VShader
 #ifdef VShader
 	attribute vec2 a_position;
 	attribute vec2 a_uv;

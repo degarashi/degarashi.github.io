@@ -1,19 +1,37 @@
 {
 	"technique": {
 		"psprite": {
-			"valueset": "valuesetP",
+			"boolset": ["Blend"],
+			"valueset": {
+				"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha", "Zero", "One"]
+			},
 			"vshader": "testPv",
 			"fshader": "testPf"
 		},
 		"imageview": {
-			"valueset": "imageviewVS",
+			"boolset": ["Blend"],
+			"valueset": {
+				"BlendFunc": ["One", "Zero", "One", "Zero"]
+			},
 			"vshader": "imageviewv",
 			"fshader": "imageviewf"
 		},
 		"thumbview": {
-			"valueset": "imageviewVS",
+			"boolset": ["Blend"],
+			"valueset": {
+				"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha", "Zero", "One"]
+			},
 			"vshader": "thumbviewv",
 			"fshader": "thumbviewf"
+		},
+		"rectt": {
+			"boolset": ["Blend"],
+			"valueset": {
+				"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha", "Zero", "One"],
+				"BlendEquation": ["Add"]
+			},
+			"vshader": "rectv",
+			"fshader": "rectf"
 		}
 	}
 }

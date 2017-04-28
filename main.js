@@ -12,19 +12,6 @@ State.prototype.onUp = function onUp (self) { };
 var BeginState = new State();
 var EndState = new State();
 
-var gl;
-function SetGL(g) { gl = g; }
-var engine;
-function SetEngine(e) { engine = e; }
-var resource;
-function SetResource(r) { resource = r; }
-var input;
-function SetInput(i) { input = i; }
-var scene;
-function SetScene(s) { scene = s; }
-var glres;
-function SetGLRes(r) { glres = r; }
-
 var BaseObject = function BaseObject() {
     this._bAlive = true;
 };
@@ -42,18 +29,20 @@ BaseObject.prototype.isDiscarded = function isDiscarded () {
 };
 
 // 描画ソートをする為の優先度値など
+// 描画ソートをする為の優先度値など
 var DrawTag = function DrawTag() {
     this.priority = 0;
-    this.technique = "";
+    this.technique = null;
 };
-DrawTag.prototype.apply = function apply () {
-    if (this.technique.length > 0)
-        { engine.setTechnique(this.technique); }
-};
+
 var DObject = (function (BaseObject$$1) {
-    function DObject() {
-        BaseObject$$1.apply(this, arguments);
+    function DObject(tech, priority) {
+        if ( priority === void 0 ) priority = 0;
+
+        BaseObject$$1.call(this);
         this.drawtag = new DrawTag();
+        this.drawtag.technique = tech;
+        this.drawtag.priority = priority;
     }
 
     if ( BaseObject$$1 ) DObject.__proto__ = BaseObject$$1;
@@ -63,9 +52,22 @@ var DObject = (function (BaseObject$$1) {
     return DObject;
 }(BaseObject));
 
+var gl;
+function SetGL(g) { gl = g; }
+var engine;
+function SetEngine(e) { engine = e; }
+var resource;
+function SetResource(r) { resource = r; }
+var input;
+function SetInput(i) { input = i; }
+var scene;
+function SetScene(s) { scene = s; }
+var glres;
+function SetGLRes(r) { glres = r; }
+
 var Clear = (function (DObject$$1) {
     function Clear(color, depth, stencil) {
-        DObject$$1.call(this);
+        DObject$$1.call(this, null);
         this.color = color;
         this.depth = depth;
         this.stencil = stencil;
@@ -1269,7 +1271,7 @@ var BlendFunc;
     BlendFunc[BlendFunc["OneMinusDstAlpha"] = 34359738377] = "OneMinusDstAlpha";
     BlendFunc[BlendFunc["ConstantColor"] = 34359738378] = "ConstantColor";
     BlendFunc[BlendFunc["OneMinusConstantColor"] = 34359738379] = "OneMinusConstantColor";
-    BlendFunc[BlendFunc["ONEMinusConstantAlpha"] = 34359738380] = "ONEMinusConstantAlpha";
+    BlendFunc[BlendFunc["OneMinusConstantAlpha"] = 34359738380] = "OneMinusConstantAlpha";
     BlendFunc[BlendFunc["SrcAlphaSaturate"] = 34359738381] = "SrcAlphaSaturate";
 })(BlendFunc || (BlendFunc = {}));
 var DepthStencilFunc;
@@ -1487,12 +1489,13 @@ var GLConst = function GLConst(gl) {
     {
         var t$3 = GLConst.ValueSetting;
         t$3.blendcolor = gl.blendColor;
-        var bfc = GLConst.BlendFuncC;
+        var beq = GLConst.BlendEquationC;
         t$3.blendequation = function (mode0, mode1) {
             if ( mode1 === void 0 ) mode1 = mode0;
 
-            gl.blendEquationSeparate(bfc.fromStringToGL(mode0), bfc.fromStringToGL(mode1));
+            gl.blendEquationSeparate(beq.fromStringToGL(mode0), beq.fromStringToGL(mode1));
         };
+        var bfc = GLConst.BlendFuncC;
         t$3.blendfunc = function (sf0, df0, sf1, df1) {
             if ( sf1 === void 0 ) sf1 = sf0;
             if ( df1 === void 0 ) df1 = df0;
@@ -2472,17 +2475,33 @@ Engine.prototype.setTechnique = function setTechnique (name) {
     if (this._active)
         { this._active.program.unbind(); }
     this._active = this._tech[name];
+    this._activeName = name;
     if (!this._active)
         { throw new Error(("No such technique: " + name)); }
     this._active.valueset.apply();
     this._active.program.bind();
     this._unif = {};
 };
+Engine.prototype.techName = function techName () {
+    return this._activeName;
+};
 Engine.prototype.technique = function technique () {
     return this._active;
 };
 Engine.prototype.program = function program () {
     return this.technique().program;
+};
+Engine.prototype.applyTag = function applyTag (tag) {
+    if (tag.technique !== null) {
+        var apl = true;
+        var tech = this.techName();
+        if (tech) {
+            if (tech === tag.technique)
+                { apl = false; }
+        }
+        if (apl)
+            { this.setTechnique(tag.technique); }
+    }
 };
 Engine.prototype.drawGeometry = function drawGeometry (geom) {
         var this$1 = this;
@@ -2958,7 +2977,7 @@ var UpdGroup = (function (GObject$$1) {
 
 var DrawGroup = (function (DObject$$1) {
     function DrawGroup() {
-        DObject$$1.apply(this, arguments);
+        DObject$$1.call(this, null);
         this.group = new Group();
         this._bRefr = true;
     }
@@ -2987,7 +3006,9 @@ var DrawGroup = (function (DObject$$1) {
         this._proc();
         var g = this.group.group();
         for (var i = 0; i < g.length; i++) {
-            g[i].onDraw();
+            var obj = g[i];
+            engine.applyTag(obj.drawtag);
+            obj.onDraw();
         }
         this._proc();
     };
@@ -3109,6 +3130,12 @@ var SceneMgr = (function (GObject$$1) {
     };
     SceneMgr.prototype.length = function length () {
         return this._scene.length;
+    };
+    SceneMgr.prototype.prev = function prev () {
+        var s = this._scene;
+        if (s.length < 2)
+            { return null; }
+        return s[s.length - 2];
     };
     SceneMgr.prototype._empty = function _empty () {
         return this.length() === 0;
@@ -3242,7 +3269,7 @@ var GLResourceSet = (function (GLResourceFlag$$1) {
     return GLResourceSet;
 }(GLResourceFlag));
 
-var Alias = { "common": "fragile/resource/common.glsl", "gauss": "fragile/resource/gauss.def", "gaussH_FS": "fragile/resource/gaussH_FS.fsh", "gaussV_FS": "fragile/resource/gaussV_FS.fsh", "gauss_mix9": "fragile/resource/gauss_mix9.glsl", "gaussh": "fragile/resource/gaussh.vsh", "gaussv": "fragile/resource/gaussv.vsh", "gaussvalue": "fragile/resource/gaussvalue.glsl", "prog": "fragile/resource/prog.prog", "rect": "fragile/resource/rect.def", "rectAdd": "fragile/resource/rectAdd.def", "rectf": "fragile/resource/rectf.fsh", "rectv": "fragile/resource/rectv.vsh", "testf": "fragile/resource/testf.fsh", "testv": "fragile/resource/testv.vsh", "textf": "fragile/resource/textf.fsh", "textv": "fragile/resource/textv.vsh", "textvalueset": "fragile/resource/textvalueset.def", "uv9": "fragile/resource/uv9.glsl", "valueset": "fragile/resource/valueset.def" };
+var Alias = { "common": "fragile/resource/common.glsl", "gauss": "fragile/resource/gauss.def", "gaussH_FS": "fragile/resource/gaussH_FS.fsh", "gaussV_FS": "fragile/resource/gaussV_FS.fsh", "gauss_mix9": "fragile/resource/gauss_mix9.glsl", "gaussh": "fragile/resource/gaussh.vsh", "gaussv": "fragile/resource/gaussv.vsh", "gaussvalue": "fragile/resource/gaussvalue.glsl", "prog": "fragile/resource/prog.prog", "rectf": "fragile/resource/rectf.fsh", "rectv": "fragile/resource/rectv.vsh", "rectvalue": "fragile/resource/rectvalue.glsl", "testf": "fragile/resource/testf.fsh", "testv": "fragile/resource/testv.vsh", "textf": "fragile/resource/textf.fsh", "textv": "fragile/resource/textv.vsh", "textvalue": "fragile/resource/textvalue.glsl", "uv9": "fragile/resource/uv9.glsl" };
 
 function _MainLoop(base, cbAlias, cbMakeScene) {
     SetResource(new ResStack(base));
@@ -3632,7 +3659,6 @@ PSprite.prototype.advance = function advance (dt) {
     this._geom.vbuffer.a_hsv.setSubData(0, vsv.buffer);
 };
 PSprite.prototype.draw = function draw (alpha) {
-    engine.setTechnique("psprite");
     if (this.texture)
         { engine.setUniform("u_texture", this.texture); }
     engine.sys3d().worldMatrix = Mat44.Identity();
@@ -3642,7 +3668,7 @@ PSprite.prototype.draw = function draw (alpha) {
 };
 var PSpriteDraw = (function (DObject$$1) {
     function PSpriteDraw(n) {
-        DObject$$1.call(this);
+        DObject$$1.call(this, "psprite");
         this._psprite = new PSprite(new Alg(n));
         var tex = resource.getResource("sphere");
         tex.setLinear(true, true, 0);
@@ -4809,7 +4835,11 @@ var Technique = (function (ResourceWrap$$1) {
                 if (!resource.checkResource(key))
                     { later.push(key); }
             };
-            chk(v.valueset);
+            if (v.valueset instanceof Object) {
+                Assert(v.boolset instanceof Object);
+            }
+            else
+                { chk(v.valueset); }
             chk(v.vshader);
             chk(v.fshader);
         });
@@ -4819,8 +4849,18 @@ var Technique = (function (ResourceWrap$$1) {
         var tech = {};
         Object.keys(src.technique).forEach(function (k) {
             var v = src.technique[k];
+            var vs;
+            if (v.valueset instanceof Object) {
+                vs = GLValueSet.FromJSON({
+                    boolset: v.boolset,
+                    valueset: v.valueset
+                });
+            }
+            else {
+                vs = GLValueSet.FromJSON(resource.getResource(v.valueset).data);
+            }
             tech[k] = {
-                valueset: GLValueSet.FromJSON(resource.getResource(v.valueset).data),
+                valueset: vs,
                 program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
             };
         });
@@ -4910,7 +4950,7 @@ LinearTimer.prototype.advance = function advance (dt) {
 
 var TextDraw = (function (DObject$$1) {
     function TextDraw(text, delay) {
-        DObject$$1.call(this);
+        DObject$$1.call(this, "text");
         this._text = text;
         this.timer = new LinearTimer(0, text.length() + delay);
         this.offset = new Vec2(0, 0);
@@ -4925,7 +4965,6 @@ var TextDraw = (function (DObject$$1) {
         return this.timer.advance(dt);
     };
     TextDraw.prototype.onDraw = function onDraw () {
-        engine.setTechnique("text");
         this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
     };
 
@@ -5255,6 +5294,44 @@ GLFramebuffer.prototype.contextLost = function contextLost () {
     return this._rf.contextLost();
 };
 
+var FBSwitch = (function (DObject$$1) {
+    function FBSwitch(buffer) {
+        DObject$$1.call(this, null);
+        this.buffer = buffer;
+    }
+
+    if ( DObject$$1 ) FBSwitch.__proto__ = DObject$$1;
+    FBSwitch.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    FBSwitch.prototype.constructor = FBSwitch;
+    FBSwitch.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        if (this.buffer.getAttachment(Attachment.Color0)) {
+            this.buffer.vp_proc(function () {
+                this$1.lower.onDraw();
+            });
+        }
+    };
+
+    return FBSwitch;
+}(DObject));
+
+var DataSwitch = function DataSwitch(data0, data1) {
+    this._data = [];
+    this._sw = 0;
+    this._data[0] = data0;
+    this._data[1] = data1;
+};
+DataSwitch.prototype.current = function current () {
+    return this._data[this._sw];
+};
+DataSwitch.prototype.prev = function prev () {
+    return this._data[this._sw ^ 1];
+};
+DataSwitch.prototype.swap = function swap () {
+    this._sw ^= 1;
+};
+
 var RPString = function RPString(name) {
     this.name = name;
 };
@@ -5349,87 +5426,84 @@ var RPGeometry = (function (RPString$$1) {
     return RPGeometry;
 }(RPString));
 
-var FullRect = (function (DObject$$1) {
-    function FullRect() {
-        DObject$$1.apply(this, arguments);
-        this._rect = ResourceGen.get(new RPGeometry("Rect01_01"));
-        this.alpha = 1;
-        this.zoom = 1;
-        this.alphablend = false;
-        this.vflip = false;
-    }
-
-    if ( DObject$$1 ) FullRect.__proto__ = DObject$$1;
-    FullRect.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    FullRect.prototype.constructor = FullRect;
-    FullRect.prototype.onDraw = function onDraw () {
-        if (!this.texture)
-            { return; }
-        engine.setTechnique(this.alphablend ? "rectAdd" : "rect");
-        engine.setUniform("u_texture", this.texture);
-        engine.setUniform("u_alpha", this.alpha);
-        var ts = this.texture.truesize();
-        var s = this.texture.size();
-        var uv = new Rect(0, s.height / ts.height, s.width / ts.width, 0);
-        engine.setUniform("u_uvcenter", uv.center());
-        var vf = this.vflip ? -1 : 1;
-        var zi = 1 / this.zoom;
-        engine.setUniform("u_uvratio", new Vec2(uv.width() / 2 * zi, uv.height() / 2 * vf * zi));
-        engine.drawGeometry(this._rect.data);
-    };
-
-    return FullRect;
-}(DObject));
-
-var FBSwitch = (function (DObject$$1) {
-    function FBSwitch(buffer) {
-        DObject$$1.call(this);
-        this.buffer = buffer;
-    }
-
-    if ( DObject$$1 ) FBSwitch.__proto__ = DObject$$1;
-    FBSwitch.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    FBSwitch.prototype.constructor = FBSwitch;
-    FBSwitch.prototype.onDraw = function onDraw () {
+var STag = function STag () {};
+STag.Source = "source";
+STag.Dest = "dest";
+STag.FB = "fb";
+var GaussSub = (function (DObject$$1) {
+    function GaussSub(tech) {
         var this$1 = this;
 
-        if (this.buffer.getAttachment(Attachment.Color0)) {
-            this.buffer.vp_proc(function () {
-                this$1.lower.onDraw();
-            });
-        }
+        DObject$$1.call(this, tech);
+        this._rect = ResourceGen.get(new RPGeometry("Rect01")).data;
+        this._rf = new Refresh(( obj = {}, obj[STag.Source] = null, obj[STag.Dest] = {
+                depend: [STag.Source],
+                func: function (prev) {
+                    if (!prev)
+                        { prev = new GLTexture2DP(); }
+                    var ss = this$1.source().size();
+                    var ds = prev.size();
+                    if (ds.width < ss.width || ds.height < ss.height) {
+                        prev.setLinear(true, true, 0);
+                        prev.setWrap(UVWrap.Clamp, UVWrap.Clamp);
+                        prev.setData(InterFormat.RGBA, ss.width, ss.height, InterFormat.RGBA, TexDataFormat.UB);
+                    }
+                    return prev;
+                }
+            }, obj[STag.FB] = {
+                depend: [STag.Dest],
+                func: function (prev) {
+                    if (!prev)
+                        { prev = new GLFramebuffer(); }
+                    prev.attach(Attachment.Color0, this$1.dest());
+                    return prev;
+                }
+            }, obj ));
+        var obj;
+    }
+
+    if ( DObject$$1 ) GaussSub.__proto__ = DObject$$1;
+    GaussSub.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    GaussSub.prototype.constructor = GaussSub;
+    GaussSub.prototype.setSource = function setSource (src) {
+        this._rf.set(STag.Source, src);
+    };
+    GaussSub.prototype.source = function source () {
+        return this._rf.get(STag.Source);
+    };
+    GaussSub.prototype.dest = function dest () {
+        return this._rf.get(STag.Dest);
+    };
+    GaussSub.prototype._fb = function _fb () {
+        return this._rf.get(STag.FB);
+    };
+    GaussSub.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        var src = this.source();
+        var coeff = this.coeff;
+        engine.setUniforms({
+            u_weight: coeff,
+            u_mapSize: src.truesize().toVec4(),
+            u_uvrect: src.uvrect().toVec4(),
+            u_texDiffuse: src
+        });
+        this._fb().vp_proc(function () {
+            engine.drawGeometry(this$1._rect);
+        });
     };
 
-    return FBSwitch;
+    return GaussSub;
 }(DObject));
-
-var DataSwitch = function DataSwitch(data0, data1) {
-    this._data = [];
-    this._sw = 0;
-    this._data[0] = data0;
-    this._data[1] = data1;
-};
-DataSwitch.prototype.current = function current () {
-    return this._data[this._sw];
-};
-DataSwitch.prototype.prev = function prev () {
-    return this._data[this._sw ^ 1];
-};
-DataSwitch.prototype.swap = function swap () {
-    this._sw ^= 1;
-};
-
 var Tag$1 = function Tag () {};
-Tag$1.Source = "source";
 Tag$1.Dispersion = "dispersion";
 Tag$1.Coeff = "coeff";
-Tag$1.Dest = "dest";
 var GaussFilter = (function (DObject$$1) {
     function GaussFilter() {
         var this$1 = this;
 
-        DObject$$1.call(this);
-        this._rf = new Refresh(( obj = {}, obj[Tag$1.Source] = null, obj[Tag$1.Dispersion] = null, obj[Tag$1.Coeff] = {
+        DObject$$1.call(this, null);
+        this._rf = new Refresh(( obj = {}, obj[Tag$1.Dispersion] = null, obj[Tag$1.Coeff] = {
                 depend: [Tag$1.Dispersion],
                 func: function (prev) {
                     var d = this$1._rf.get(Tag$1.Dispersion);
@@ -5449,47 +5523,27 @@ var GaussFilter = (function (DObject$$1) {
                     }
                     return ca;
                 }
-            }, obj[Tag$1.Dest] = {
-                depend: [Tag$1.Source],
-                func: function (prev) {
-                    var ss = this$1._source().size();
-                    var ds = prev[0].size();
-                    if (ds.width < ss.width || ds.height < ss.height) {
-                        for (var i = 0; i < 2; i++)
-                            { prev[i].setData(InterFormat.RGBA, ss.width, ss.height, InterFormat.RGBA, TexDataFormat.UB); }
-                    }
-                    return prev;
-                }
             }, obj ));
         var obj;
-        this._fb = [new GLFramebuffer(), new GLFramebuffer()];
-        var dest = [new GLTexture2DP(), new GLTexture2DP()];
-        this._rf.set(Tag$1.Dest, dest);
+        this._pass = new DrawGroup();
+        this._sub = [new GaussSub("gaussh"), new GaussSub("gaussv")];
         for (var i = 0; i < 2; i++) {
-            dest[i].setLinear(true, true, 0);
-            dest[i].setWrap(UVWrap.Clamp, UVWrap.Clamp);
-            this$1._fb[i].attach(Attachment.Color0, dest[i]);
+            this$1._pass.group.add(this$1._sub[i]);
         }
-        this._rect = ResourceGen.get(new RPGeometry("Rect01"));
     }
 
     if ( DObject$$1 ) GaussFilter.__proto__ = DObject$$1;
     GaussFilter.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     GaussFilter.prototype.constructor = GaussFilter;
     GaussFilter.prototype.setSource = function setSource (src) {
-        this._rf.set(Tag$1.Source, src);
-    };
-    GaussFilter.prototype._dest = function _dest () {
-        return this._rf.get(Tag$1.Dest);
-    };
-    GaussFilter.prototype._source = function _source () {
-        return this._rf.get(Tag$1.Source);
+        this._sub[0].setSource(src);
+        this._sub[1].setSource(this._sub[0].dest());
     };
     GaussFilter.prototype._coeff = function _coeff () {
         return this._rf.get(Tag$1.Coeff);
     };
     GaussFilter.prototype.result = function result () {
-        return this._dest()[1];
+        return this._sub[1].dest();
     };
     GaussFilter.prototype.setDispersion = function setDispersion (d) {
         this._rf.set(Tag$1.Dispersion, d);
@@ -5497,22 +5551,12 @@ var GaussFilter = (function (DObject$$1) {
     GaussFilter.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        if (this._source()) {
+        if (this._sub[0].source()) {
             var coeff = this._coeff();
             for (var i = 0; i < 2; i++) {
-                engine.setTechnique(GaussFilter.TechName[i]);
-                var src = (i === 0) ? this$1._source() : this$1._dest()[0];
-                engine.setUniforms({
-                    u_weight: coeff,
-                    u_mapSize: src.truesize().toVec4(),
-                    u_uvrect: src.uvrect().toVec4(),
-                    u_texDiffuse: src
-                });
-                this$1._fb[i].attach(Attachment.Color0, this$1._dest()[i]);
-                this$1._fb[i].vp_proc(function () {
-                    engine.drawGeometry(this$1._rect.data);
-                });
+                this$1._sub[i].coeff = coeff;
             }
+            this._pass.onDraw();
         }
     };
 
@@ -5520,7 +5564,89 @@ var GaussFilter = (function (DObject$$1) {
 }(DObject));
 
 GaussFilter.Tag = Tag$1;
-GaussFilter.TechName = ["gaussh", "gaussv"];
+
+var RPBeta = function RPBeta(color) {
+    this.color = color;
+};
+
+var prototypeAccessors$5 = { name: {},key: {} };
+prototypeAccessors$5.name.get = function () { return "Beta"; };
+prototypeAccessors$5.key.get = function () {
+    var c = this.color;
+    return ("Beta_" + (c.x) + "_" + (c.y) + "_" + (c.z));
+};
+
+Object.defineProperties( RPBeta.prototype, prototypeAccessors$5 );
+
+ResourceGenSrc.Beta = function (rp) {
+    var ret = new GLTexture2D();
+    ret.setLinear(true, true, 0);
+    ret.setWrap(UVWrap.Clamp, UVWrap.Clamp);
+    var dim = rp.color.dim();
+    var ub = new Uint8Array(dim);
+    for (var i = 0; i < dim; i++) {
+        ub[i] = rp.color.value[i] * 255;
+    }
+    ret.setData(InterFormat.RGB, 1, 1, InterFormat.RGB, TexDataFormat.UB, ub);
+    return ret;
+};
+
+var WrapRectBase = (function (DObject$$1) {
+    function WrapRectBase(tech) {
+        DObject$$1.call(this, tech);
+        this._rect = ResourceGen.get(new RPGeometry("Rect01_01"));
+        this.zoom = 1;
+        this.alpha = 1;
+        this.vflip = false;
+        this.color = new Vec3(1);
+    }
+
+    if ( DObject$$1 ) WrapRectBase.__proto__ = DObject$$1;
+    WrapRectBase.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    WrapRectBase.prototype.constructor = WrapRectBase;
+    WrapRectBase.prototype.onDraw = function onDraw () {
+        if (!this.texture) {
+            this.texture = ResourceGen.get(new RPBeta(new Vec3(1, 1, 1)));
+        }
+        engine.setUniform("u_texture", this.texture);
+        engine.setUniform("u_alpha", this.alpha);
+        engine.setUniform("u_color", this.color);
+        var ts = this.texture.truesize();
+        var s = this.texture.size();
+        var uv = new Rect(0, s.height / ts.height, s.width / ts.width, 0);
+        engine.setUniform("u_uvcenter", uv.center());
+        var vf = this.vflip ? -1 : 1;
+        var zi = 1 / this.zoom;
+        engine.setUniform("u_uvratio", new Vec2(uv.width() / 2 * zi, uv.height() / 2 * vf * zi));
+        engine.drawGeometry(this._rect.data);
+    };
+
+    return WrapRectBase;
+}(DObject));
+
+var WrapRect = (function (WrapRectBase$$1) {
+    function WrapRect() {
+        WrapRectBase$$1.call(this, "rect");
+    }
+
+    if ( WrapRectBase$$1 ) WrapRect.__proto__ = WrapRectBase$$1;
+    WrapRect.prototype = Object.create( WrapRectBase$$1 && WrapRectBase$$1.prototype );
+    WrapRect.prototype.constructor = WrapRect;
+
+    return WrapRect;
+}(WrapRectBase));
+
+var WrapRectAdd = (function (WrapRectBase$$1) {
+    function WrapRectAdd() {
+        WrapRectBase$$1.call(this, "rectAdd");
+    }
+
+    if ( WrapRectBase$$1 ) WrapRectAdd.__proto__ = WrapRectBase$$1;
+    WrapRectAdd.prototype = Object.create( WrapRectBase$$1 && WrapRectBase$$1.prototype );
+    WrapRectAdd.prototype.constructor = WrapRectAdd;
+
+    return WrapRectAdd;
+}(WrapRectBase));
 
 var Linear = function Linear(duration) {
     this._init = 0;
@@ -5562,7 +5688,7 @@ function Lerp(v0, v1, t) {
 }
 var ImageView = (function (DObject$$1) {
     function ImageView() {
-        DObject$$1.call(this);
+        DObject$$1.call(this, "imageview");
         this._geom = ResourceGen.get(new RPGeometry("Rect01")).data;
         this._ease = new Ease(0.3);
     }
@@ -5586,7 +5712,6 @@ var ImageView = (function (DObject$$1) {
             sv.y = er * (1 / r);
         }
         sv.mulSelf(Lerp(0.7, 1.0, this._ease.value()));
-        engine.setTechnique("imageview");
         engine.setUniforms({
             u_texture: this.texture,
             u_scale: sv
@@ -5737,7 +5862,7 @@ var ThumbView = (function (DObject$$1) {
     function ThumbView() {
         var this$1 = this;
 
-        DObject$$1.call(this);
+        DObject$$1.call(this, "thumbview");
         this._rf = new Refresh(( obj = {}, obj[Tag$2.ScreenSize] = null, obj[Tag$2.TileSize] = null, obj[Tag$2.Space] = null, obj[Tag$2.ThumbnailTex] = null, obj[Tag$2.PlaceInfo] = {
                 depend: [Tag$2.ScreenSize, Tag$2.TileSize, Tag$2.Space],
                 func: function (prev) {
@@ -5836,7 +5961,6 @@ var ThumbView = (function (DObject$$1) {
     ThumbView.prototype.onDraw = function onDraw () {
         var tm = this._thumbnail();
         if (tm) {
-            engine.setTechnique("thumbview");
             for (var i = 0; i < tm.length; i++) {
                 tm[i].advance(0.16);
                 tm[i].draw(0);
@@ -5858,12 +5982,23 @@ var DrawSort;
     };
 })(DrawSort || (DrawSort = {}));
 
-var Alias$2 = { "hsv": "resource/hsv.glsl", "imageviewVS": "resource/imageviewVS.def", "imageviewf": "resource/imageviewf.fsh", "imageviewv": "resource/imageviewv.vsh", "ps": "resource/ps.prog", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "thumbviewf": "resource/thumbviewf.fsh", "thumbviewv": "resource/thumbviewv.vsh", "valuesetP": "resource/valuesetP.def" };
+var Alias$2 = { "hsv": "resource/hsv.glsl", "imageviewf": "resource/imageviewf.fsh", "imageviewv": "resource/imageviewv.vsh", "ps": "resource/ps.prog", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "thumbviewf": "resource/thumbviewf.fsh", "thumbviewv": "resource/thumbviewv.vsh" };
 
 var Alias$4 = { "1day_00": "image_resource/1day_00.jpg", "47_small": "image_resource/47_small.jpg", "alien0_small": "image_resource/alien0_small.jpg", "alien_m_small": "image_resource/alien_m_small.jpg", "aro_keyboard_small": "image_resource/aro_keyboard_small.jpg", "cat_2_draft_small": "image_resource/cat_2_draft_small.jpg", "cat_2_small": "image_resource/cat_2_small.jpg", "chestburster_blood_small": "image_resource/chestburster_blood_small.jpg", "chestburster_white_small": "image_resource/chestburster_white_small.jpg", "creature_small": "image_resource/creature_small.jpg", "d_dogFinal_small": "image_resource/d_dogFinal_small.jpg", "displeased_dragon": "image_resource/displeased_dragon.jpg", "eng_zargo_small": "image_resource/eng_zargo_small.jpg", "facehugger_small": "image_resource/facehugger_small.jpg", "forest_fall_small": "image_resource/forest_fall_small.jpg", "gecko": "image_resource/gecko.jpg", "greenpython_small": "image_resource/greenpython_small.jpg", "husky0_small": "image_resource/husky0_small.jpg", "husky_paint_small": "image_resource/husky_paint_small.jpg", "jz_small": "image_resource/jz_small.jpg", "kakizome_small": "image_resource/kakizome_small.jpg", "kanzume": "image_resource/kanzume.jpg", "licker_small": "image_resource/licker_small.jpg", "lizard0_small": "image_resource/lizard0_small.jpg", "manzoku_ds": "image_resource/manzoku_ds.jpg", "mee_small": "image_resource/mee_small.jpg", "motivation_small": "image_resource/motivation_small.jpg", "muscle0_small": "image_resource/muscle0_small.jpg", "muscle1_small": "image_resource/muscle1_small.jpg", "muscle2_small": "image_resource/muscle2_small.jpg", "muscle_small": "image_resource/muscle_small.jpg", "numakuro_small": "image_resource/numakuro_small.jpg", "okami_ps": "image_resource/okami_ps.jpg", "pika_small": "image_resource/pika_small.jpg", "plates": "image_resource/plates.jpg", "prac2_small": "image_resource/prac2_small.jpg", "python0": "image_resource/python0.jpg", "saliva_final_small": "image_resource/saliva_final_small.jpg", "sand_small": "image_resource/sand_small.jpg", "shard_of_clear_sky_small": "image_resource/shard_of_clear_sky_small.jpg", "skull1_small": "image_resource/skull1_small.jpg", "skull2_small": "image_resource/skull2_small.jpg", "skull3_small": "image_resource/skull3_small.jpg", "skullNF_0_small": "image_resource/skullNF_0_small.jpg", "skullN_0_small": "image_resource/skullN_0_small.jpg", "skullN_1_0_small": "image_resource/skullN_1_0_small.jpg", "skullN_1_1_small": "image_resource/skullN_1_1_small.jpg", "skullN_2_0_small": "image_resource/skullN_2_0_small.jpg", "slime_small": "image_resource/slime_small.jpg", "small_morning_dragon": "image_resource/small_morning_dragon.jpg", "small_shadow_death": "image_resource/small_shadow_death.jpg", "small_simacchau": "image_resource/small_simacchau.jpg", "small_suddenly": "image_resource/small_suddenly.jpg", "small_suddenly_v1": "image_resource/small_suddenly_v1.jpg", "small_suddenly_v2": "image_resource/small_suddenly_v2.jpg", "sphereZ": "image_resource/sphereZ.jpg", "tank_day_small": "image_resource/tank_day_small.jpg", "twilight_creature_small": "image_resource/twilight_creature_small.jpg", "usb_tentacle_final_small": "image_resource/usb_tentacle_final_small.jpg", "wolf0": "image_resource/wolf0.jpg", "wolf1": "image_resource/wolf1.jpg", "wolfTF_C_small": "image_resource/wolfTF_C_small.jpg", "wolfTF_small": "image_resource/wolfTF_small.jpg", "wolf_in_ruins_small": "image_resource/wolf_in_ruins_small.jpg", "wolf_small": "image_resource/wolf_small.jpg", "y10_energy_small": "image_resource/y10_energy_small.jpg", "y10_izakaya_small": "image_resource/y10_izakaya_small.jpg", "y10_poster_small": "image_resource/y10_poster_small.jpg", "y10_rooftop_small": "image_resource/y10_rooftop_small.jpg", "y10_white_small": "image_resource/y10_white_small.jpg" };
 
 var Alias$5 = { "thumbnail-1day_00": "thumbnail/thumbnail-1day_00.jpg", "thumbnail-47_small": "thumbnail/thumbnail-47_small.jpg", "thumbnail-alien0_small": "thumbnail/thumbnail-alien0_small.jpg", "thumbnail-alien_m_small": "thumbnail/thumbnail-alien_m_small.jpg", "thumbnail-aro_keyboard_small": "thumbnail/thumbnail-aro_keyboard_small.jpg", "thumbnail-cat_2_draft_small": "thumbnail/thumbnail-cat_2_draft_small.jpg", "thumbnail-cat_2_small": "thumbnail/thumbnail-cat_2_small.jpg", "thumbnail-chestburster_blood_small": "thumbnail/thumbnail-chestburster_blood_small.jpg", "thumbnail-chestburster_white_small": "thumbnail/thumbnail-chestburster_white_small.jpg", "thumbnail-creature_small": "thumbnail/thumbnail-creature_small.jpg", "thumbnail-d_dogFinal_small": "thumbnail/thumbnail-d_dogFinal_small.jpg", "thumbnail-displeased_dragon": "thumbnail/thumbnail-displeased_dragon.jpg", "thumbnail-eng_zargo_small": "thumbnail/thumbnail-eng_zargo_small.jpg", "thumbnail-facehugger_small": "thumbnail/thumbnail-facehugger_small.jpg", "thumbnail-forest_fall_small": "thumbnail/thumbnail-forest_fall_small.jpg", "thumbnail-gecko": "thumbnail/thumbnail-gecko.jpg", "thumbnail-greenpython_small": "thumbnail/thumbnail-greenpython_small.jpg", "thumbnail-husky0_small": "thumbnail/thumbnail-husky0_small.jpg", "thumbnail-husky_paint_small": "thumbnail/thumbnail-husky_paint_small.jpg", "thumbnail-jz_small": "thumbnail/thumbnail-jz_small.jpg", "thumbnail-kakizome_small": "thumbnail/thumbnail-kakizome_small.jpg", "thumbnail-kanzume": "thumbnail/thumbnail-kanzume.jpg", "thumbnail-licker_small": "thumbnail/thumbnail-licker_small.jpg", "thumbnail-lizard0_small": "thumbnail/thumbnail-lizard0_small.jpg", "thumbnail-manzoku_ds": "thumbnail/thumbnail-manzoku_ds.jpg", "thumbnail-mee_small": "thumbnail/thumbnail-mee_small.jpg", "thumbnail-motivation_small": "thumbnail/thumbnail-motivation_small.jpg", "thumbnail-muscle0_small": "thumbnail/thumbnail-muscle0_small.jpg", "thumbnail-muscle1_small": "thumbnail/thumbnail-muscle1_small.jpg", "thumbnail-muscle2_small": "thumbnail/thumbnail-muscle2_small.jpg", "thumbnail-muscle_small": "thumbnail/thumbnail-muscle_small.jpg", "thumbnail-numakuro_small": "thumbnail/thumbnail-numakuro_small.jpg", "thumbnail-okami_ps": "thumbnail/thumbnail-okami_ps.jpg", "thumbnail-pika_small": "thumbnail/thumbnail-pika_small.jpg", "thumbnail-plates": "thumbnail/thumbnail-plates.jpg", "thumbnail-prac2_small": "thumbnail/thumbnail-prac2_small.jpg", "thumbnail-python0": "thumbnail/thumbnail-python0.jpg", "thumbnail-saliva_final_small": "thumbnail/thumbnail-saliva_final_small.jpg", "thumbnail-sand_small": "thumbnail/thumbnail-sand_small.jpg", "thumbnail-shard_of_clear_sky_small": "thumbnail/thumbnail-shard_of_clear_sky_small.jpg", "thumbnail-skull1_small": "thumbnail/thumbnail-skull1_small.jpg", "thumbnail-skull2_small": "thumbnail/thumbnail-skull2_small.jpg", "thumbnail-skull3_small": "thumbnail/thumbnail-skull3_small.jpg", "thumbnail-skullNF_0_small": "thumbnail/thumbnail-skullNF_0_small.jpg", "thumbnail-skullN_0_small": "thumbnail/thumbnail-skullN_0_small.jpg", "thumbnail-skullN_1_0_small": "thumbnail/thumbnail-skullN_1_0_small.jpg", "thumbnail-skullN_1_1_small": "thumbnail/thumbnail-skullN_1_1_small.jpg", "thumbnail-skullN_2_0_small": "thumbnail/thumbnail-skullN_2_0_small.jpg", "thumbnail-slime_small": "thumbnail/thumbnail-slime_small.jpg", "thumbnail-small_morning_dragon": "thumbnail/thumbnail-small_morning_dragon.jpg", "thumbnail-small_shadow_death": "thumbnail/thumbnail-small_shadow_death.jpg", "thumbnail-small_simacchau": "thumbnail/thumbnail-small_simacchau.jpg", "thumbnail-small_suddenly": "thumbnail/thumbnail-small_suddenly.jpg", "thumbnail-small_suddenly_v1": "thumbnail/thumbnail-small_suddenly_v1.jpg", "thumbnail-small_suddenly_v2": "thumbnail/thumbnail-small_suddenly_v2.jpg", "thumbnail-sphereZ": "thumbnail/thumbnail-sphereZ.jpg", "thumbnail-tank_day_small": "thumbnail/thumbnail-tank_day_small.jpg", "thumbnail-twilight_creature_small": "thumbnail/thumbnail-twilight_creature_small.jpg", "thumbnail-usb_tentacle_final_small": "thumbnail/thumbnail-usb_tentacle_final_small.jpg", "thumbnail-wolf0": "thumbnail/thumbnail-wolf0.jpg", "thumbnail-wolf1": "thumbnail/thumbnail-wolf1.jpg", "thumbnail-wolfTF_C_small": "thumbnail/thumbnail-wolfTF_C_small.jpg", "thumbnail-wolfTF_small": "thumbnail/thumbnail-wolfTF_small.jpg", "thumbnail-wolf_in_ruins_small": "thumbnail/thumbnail-wolf_in_ruins_small.jpg", "thumbnail-wolf_small": "thumbnail/thumbnail-wolf_small.jpg", "thumbnail-y10_energy_small": "thumbnail/thumbnail-y10_energy_small.jpg", "thumbnail-y10_izakaya_small": "thumbnail/thumbnail-y10_izakaya_small.jpg", "thumbnail-y10_poster_small": "thumbnail/thumbnail-y10_poster_small.jpg", "thumbnail-y10_rooftop_small": "thumbnail/thumbnail-y10_rooftop_small.jpg", "thumbnail-y10_white_small": "thumbnail/thumbnail-y10_white_small.jpg" };
 
+var WrapRectT = (function (WrapRectBase$$1) {
+    function WrapRectT() {
+        WrapRectBase$$1.call(this, "rectt");
+    }
+
+    if ( WrapRectBase$$1 ) WrapRectT.__proto__ = WrapRectBase$$1;
+    WrapRectT.prototype = Object.create( WrapRectBase$$1 && WrapRectBase$$1.prototype );
+    WrapRectT.prototype.constructor = WrapRectT;
+
+    return WrapRectT;
+}(WrapRectBase));
 // particle dance
 var StParticle = (function (State$$1) {
     function StParticle() {
@@ -5889,6 +6024,7 @@ var StParticle = (function (State$$1) {
         this._rb.allocate(RBFormat.Depth16, GetPowValue(size.width / 2), GetPowValue(size.height / 2));
     };
     StParticle.prototype.onEnter = function onEnter (self, prev) {
+        this._bLoading = false;
         // 残像用のフレームバッファ
         this._allocateBuffer(engine.size());
         this._fb.attach(Attachment.Depth, this._rb);
@@ -5909,14 +6045,14 @@ var StParticle = (function (State$$1) {
         }
         // 残像上書き
         {
-            var fr = new FullRect();
-            fr.drawtag.priority = 20;
-            fr.alpha = 0.85;
-            fr.alphablend = true;
-            dg_m.group.add(fr);
-            this._fr_m = fr;
+            var wr = new WrapRectAdd();
+            wr.drawtag.priority = 20;
+            wr.alpha = 0.85;
+            dg_m.group.add(wr);
+            this._fr_m = wr;
         }
         var dg = new DrawGroup();
+        dg.setSortAlgorithm(DrawSort.Priority);
         {
             var fbw = new FBSwitch(this._fb);
             fbw.drawtag.priority = 0;
@@ -5932,12 +6068,10 @@ var StParticle = (function (State$$1) {
         }
         // 結果表示
         {
-            var fr$1 = new FullRect();
-            fr$1.drawtag.priority = 10;
-            fr$1.alpha = 1.0;
-            fr$1.alphablend = false;
-            dg.group.add(fr$1);
-            this._fr = fr$1;
+            var wr$1 = new WrapRect();
+            wr$1.drawtag.priority = 10;
+            dg.group.add(wr$1);
+            this._fr = wr$1;
         }
         {
             var ts = [];
@@ -5955,30 +6089,67 @@ var StParticle = (function (State$$1) {
             this._tv = tv;
             this._tvV = 0;
         }
+        this._gauss.setSource(this._tex.current());
         this._fr.texture = this._gauss.result();
         self.drawTarget = dg;
+        {
+            var wt = new WrapRectT();
+            this._loadingBg = wt;
+            wt.alpha = 0.75;
+            wt.color = new Vec3(0, 0, 0);
+            wt.drawtag.priority = 40;
+        }
+        var ldt = new TextShow();
+        ldt.alpha = 1;
+        ldt.text.setText("Loading");
+        ldt.drawtag.priority = 50;
+        ldt.text.setSize(new Size(512, 512));
+        ldt.text.setFont(new Font("arial", "2em", "normal", false));
+        ldt.offset = PlaceCenter(engine.size(), ldt.text.resultSize());
+        this._loadText = ldt;
     };
     StParticle.prototype.onDown = function onDown (self, ret) {
         if (ret instanceof Error)
             { console.log(ret.message); }
+        else {
+            var dg = self.asDrawGroup();
+            dg.group.remove(this._loadingBg);
+            dg.group.remove(this._loadText);
+        }
     };
     StParticle.prototype.onUpdate = function onUpdate (self, dt) {
+        var this$1 = this;
+
         var size = engine.size();
         if (!this._size.equal(size)) {
             this._allocateBuffer(size);
             this._tv.setScreenSize(size);
         }
-        if (input.isMKeyClicked(0)) {
+        if (!this._bLoading && input.isMKeyClicked(0)) {
             var pos = input.position();
             pos = engine.getScreenCoord(pos);
             var ret = this._tv.click(pos);
             if (typeof ret === "number") {
+                this._bLoading = true;
                 var key = Object.keys(Alias$4);
                 var res = key[ret];
-                scene.push(new LoadingScene([res], function () { return new View(res); }, undefined, function (taskIndex, loadedBytes, totalBytes) {
-                    console.log((loadedBytes + " / " + totalBytes));
-                }), false);
-                return;
+                resource.loadFrame([res], {
+                    completed: function () {
+                        this$1._bLoading = false;
+                        scene.push(new View(res), false);
+                    },
+                    taskprogress: function (taskIndex, loaded, total) {
+                        var text = "Loading... " + (Math.floor(loaded / 1024)) + "kb / " + (Math.floor(total / 1024)) + "kb";
+                        this$1._loadText.text.setText(text);
+                        this$1._loadText.offset = PlaceCenter(engine.size(), this$1._loadText.text.resultSize());
+                    },
+                    progress: function (loaded, total) { },
+                    error: function () {
+                        console.log("Error");
+                    }
+                });
+                self.asDrawGroup().group.add(this._loadingBg);
+                self.asDrawGroup().group.add(this._loadText);
             }
         }
         this._tex.swap();
@@ -6070,7 +6241,7 @@ var MyScene = (function (Scene$$1) {
 }(Scene));
 var TextShow = (function (DObject$$1) {
     function TextShow() {
-        DObject$$1.apply(this, arguments);
+        DObject$$1.call(this, "text");
         this.text = new Text();
         this.offset = new Vec2(0, 0);
         this.alpha = 1;
@@ -6080,8 +6251,7 @@ var TextShow = (function (DObject$$1) {
     TextShow.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     TextShow.prototype.constructor = TextShow;
     TextShow.prototype.onDraw = function onDraw () {
-        engine.setTechnique("text");
-        this.text.draw(this.offset, 0, 0, this.alpha);
+        this.text.draw(this.offset, 65536, 1, this.alpha);
     };
 
     return TextShow;
@@ -6119,6 +6289,14 @@ var MyLoading = (function (LoadingScene$$1) {
 
     return MyLoading;
 }(LoadingScene));
+// 描画を継続しながら裏で読み込み
+// ValueSetの重複をなんとかする
+// DrawTag-Sortにより、不要なVB,IB,Uniform,Techの切り変えを抑制
+// 事前にASyncで読み込んでおくのもメンドイ
+// Uniformを毎回セット&チェックするのか
+// DrawGroupの構成
+// Arrayでの指定
+// Groupからのdiscardを伴う削除
 window.onload = function () {
     var onError = function (name) {
         throw Error(("duplicate resource \"" + name + "\""));

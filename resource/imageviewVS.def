@@ -1,6 +1,0 @@
-{
-	"boolset": ["Blend"],
-	"valueset": {
-		"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha"]
-	}
-}
