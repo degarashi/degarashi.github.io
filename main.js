@@ -1828,6 +1828,8 @@ GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, 
     var base = this._param[Backup.Index.Base];
     base.writeSubData(this.truesize().width, rect.left, rect.bottom, rect.width(), pixels);
     this.proc(function () {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.bottom, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
     });
 };
@@ -1848,6 +1850,8 @@ GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType
 
     Assert(srcFmtType === TexDataFormat.UB);
     this.proc(function () {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
     });
 };
@@ -6264,7 +6268,6 @@ var MyLoading = (function (LoadingScene$$1) {
             this$1._loaded = loaded;
             this$1._total = total;
         }, function (id, loaded, total) {
-            console.log(("task:" + id + " [" + loaded + " / " + total + "]"));
         });
         var t = new TextShow();
         var tx = t.text;
@@ -6289,14 +6292,7 @@ var MyLoading = (function (LoadingScene$$1) {
 
     return MyLoading;
 }(LoadingScene));
-// 描画を継続しながら裏で読み込み
-// ValueSetの重複をなんとかする
-// DrawTag-Sortにより、不要なVB,IB,Uniform,Techの切り変えを抑制
-// 事前にASyncで読み込んでおくのもメンドイ
-// Uniformを毎回セット&チェックするのか
-// DrawGroupの構成
-// Arrayでの指定
-// Groupからのdiscardを伴う削除
+
 window.onload = function () {
     var onError = function (name) {
         throw Error(("duplicate resource \"" + name + "\""));
