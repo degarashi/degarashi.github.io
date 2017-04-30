@@ -196,6 +196,12 @@ VectorImpl.prototype.dot = function dot (v) {
 VectorImpl.prototype.minus = function minus () {
     return this.mul(-1);
 };
+VectorImpl.prototype.dist_sq = function dist_sq (v) {
+    return this.sub(v).len_sq();
+};
+VectorImpl.prototype.distance = function distance (v) {
+    return Math.sqrt(this.dist_sq(v));
+};
 VectorImpl.prototype.toString = function toString () {
         var this$1 = this;
 
@@ -6349,6 +6355,12 @@ var StParticle = (function (State$$1) {
         this._cb = [new GLTexture2DP(), new GLTexture2DP()];
         this._rb = new GLRenderbuffer();
         this._tex = new DataSwitch(this._cb[0], this._cb[1]);
+        // ボタンが押された時刻(Date)
+        this._pushBegin = null;
+        // ボタンが押された時の座標(Screen)
+        this._pushPos = null;
+        // 前回判定時の座標
+        this._pushPrevPos = null;
     }
 
     if ( State$$1 ) StParticle.__proto__ = State$$1;
@@ -6460,18 +6472,19 @@ var StParticle = (function (State$$1) {
             this._bLoading = false;
         }
     };
-    StParticle.prototype.onUpdate = function onUpdate (self, dt) {
-        var this$1 = this;
-
+    // 画面サイズが変わった際のテクスチャリアロケート
+    StParticle.prototype._reallocIfChanged = function _reallocIfChanged () {
         var size = engine.size();
         if (!this._size.equal(size)) {
             this._allocateBuffer(size);
             this._tv.setScreenSize(size);
         }
-        if (!this._bLoading && input.isMKeyClicked(0)) {
-            var pos = input.position();
-            pos = engine.getScreenCoord(pos);
-            var ret = this._tv.click(pos);
+    };
+    StParticle.prototype._tapped = function _tapped (self, spos) {
+        var this$1 = this;
+
+        if (!this._bLoading) {
+            var ret = this._tv.click(spos);
             if (typeof ret === "number") {
                 this._bLoading = true;
                 var key = Object.keys(Alias$4);
@@ -6492,14 +6505,62 @@ var StParticle = (function (State$$1) {
                         console.log("Error");
                     }
                 });
-                self.asDrawGroup().group.add(this._loadingBg);
-                self.asDrawGroup().group.add(this._loadText);
+                var dg = self.asDrawGroup();
+                dg.group.add(this._loadingBg);
+                dg.group.add(this._loadText);
             }
         }
+    };
+    StParticle.prototype._dragging = function _dragging (self, diff) {
+        console.log(("dragging " + diff));
+    };
+    StParticle.prototype._detectInput = function _detectInput (self) {
+        var wpos = input.position();
+        var spos = engine.getScreenCoord(wpos);
+        var press = input.isMKeyPressing(0);
+        var time = new Date().getTime();
+        if (this._pushBegin === null) {
+            if (press) {
+                this._pushBegin = time;
+                this._pushPrevPos = this._pushPos = spos;
+            }
+        }
+        else {
+            var diff = time - this._pushBegin;
+            // タップ判定
+            if (!press) {
+                // 押下開始から1秒経つまでに離された
+                if (diff < StParticle.TapTime) {
+                    // 押下開始地点から一定の距離範囲内
+                    var dist = spos.distance(this._pushPos);
+                    if (dist < StParticle.TapDistance)
+                        { this._tapped(self, spos); }
+                }
+                this._pushBegin = null;
+                this._pushPos = this._pushPrevPos = null;
+            }
+            else {
+                // ドラッグ判定
+                // 押下開始地点から一定の距離範囲外
+                var dist$1 = spos.distance(this._pushPos);
+                var diff$1 = spos.sub(this._pushPrevPos);
+                var bD = diff$1.len_sq() > 0;
+                this._pushPrevPos = spos;
+                if (dist$1 >= StParticle.TapDistance && bD)
+                    { this._dragging(self, diff$1); }
+            }
+        }
+    };
+    StParticle.prototype._swapBuffer = function _swapBuffer () {
         this._tex.swap();
         this._fb.attach(Attachment.Color0, this._tex.current());
         this._fr_m.setTexture(this._tex.prev());
         this._gauss.setSource(this._tex.current());
+    };
+    StParticle.prototype.onUpdate = function onUpdate (self, dt) {
+        this._reallocIfChanged();
+        this._detectInput(self);
+        this._swapBuffer();
         this._alpha += dt / 2;
         this._psp.advance(dt);
         this._psp.alpha = Math.min(1, this._alpha);
@@ -6511,6 +6572,8 @@ var StParticle = (function (State$$1) {
 
     return StParticle;
 }(State));
+StParticle.TapTime = 1000;
+StParticle.TapDistance = 0.01;
 var StFadeout = (function (State$$1) {
     function StFadeout () {
         State$$1.apply(this, arguments);
