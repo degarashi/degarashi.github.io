@@ -23,15 +23,6 @@
 			},
 			"vshader": "thumbviewv",
 			"fshader": "thumbviewf"
-		},
-		"rectt": {
-			"boolset": ["Blend"],
-			"valueset": {
-				"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha", "Zero", "One"],
-				"BlendEquation": ["Add"]
-			},
-			"vshader": "rectv",
-			"fshader": "rectf"
 		}
 	}
 }

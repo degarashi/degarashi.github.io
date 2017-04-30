@@ -12,91 +12,6 @@ State.prototype.onUp = function onUp (self) { };
 var BeginState = new State();
 var EndState = new State();
 
-var BaseObject = function BaseObject() {
-    this._bAlive = true;
-};
-BaseObject.prototype.alive = function alive () {
-    return this._bAlive;
-};
-// ------------- from Discardable -------------
-BaseObject.prototype.discard = function discard () {
-    var prev = this._bAlive;
-    this._bAlive = false;
-    return prev;
-};
-BaseObject.prototype.isDiscarded = function isDiscarded () {
-    return !this._bAlive;
-};
-
-// 描画ソートをする為の優先度値など
-// 描画ソートをする為の優先度値など
-var DrawTag = function DrawTag() {
-    this.priority = 0;
-    this.technique = null;
-};
-
-var DObject = (function (BaseObject$$1) {
-    function DObject(tech, priority) {
-        if ( priority === void 0 ) priority = 0;
-
-        BaseObject$$1.call(this);
-        this.drawtag = new DrawTag();
-        this.drawtag.technique = tech;
-        this.drawtag.priority = priority;
-    }
-
-    if ( BaseObject$$1 ) DObject.__proto__ = BaseObject$$1;
-    DObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
-    DObject.prototype.constructor = DObject;
-
-    return DObject;
-}(BaseObject));
-
-var gl;
-function SetGL(g) { gl = g; }
-var engine;
-function SetEngine(e) { engine = e; }
-var resource;
-function SetResource(r) { resource = r; }
-var input;
-function SetInput(i) { input = i; }
-var scene;
-function SetScene(s) { scene = s; }
-var glres;
-function SetGLRes(r) { glres = r; }
-
-var Clear = (function (DObject$$1) {
-    function Clear(color, depth, stencil) {
-        DObject$$1.call(this, null);
-        this.color = color;
-        this.depth = depth;
-        this.stencil = stencil;
-    }
-
-    if ( DObject$$1 ) Clear.__proto__ = DObject$$1;
-    Clear.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    Clear.prototype.constructor = Clear;
-    Clear.prototype.onDraw = function onDraw () {
-        var flag = 0;
-        if (this.color) {
-            var c = this.color;
-            gl.clearColor(c.x, c.y, c.z, c.w);
-            flag |= gl.COLOR_BUFFER_BIT;
-        }
-        if (this.depth) {
-            gl.clearDepth(this.depth);
-            flag |= gl.DEPTH_BUFFER_BIT;
-        }
-        if (this.stencil) {
-            gl.clearStencil(this.stencil);
-            flag |= gl.STENCIL_BUFFER_BIT;
-        }
-        gl.clear(flag);
-    };
-
-    return Clear;
-}(DObject));
-
 // 数学関連のクラス
 var TM;
 (function (TM) {
@@ -503,6 +418,115 @@ function GetPowValue(v) {
     --v;
     return (v & ~LowBits32(v >>> 1)) << 1;
 }
+
+var RefCount = function RefCount() {
+    this._count = 1;
+};
+// ------------- from Discardable -------------
+RefCount.prototype.acquire = function acquire () {
+    ++this._count;
+};
+RefCount.prototype.discard = function discard (cb) {
+    Assert(this._count > 0, "already discarded");
+    if (this._count === 1) {
+        if (cb)
+            { cb(); }
+    }
+    --this._count;
+};
+RefCount.prototype.count = function count () {
+    return this._count;
+};
+
+var BaseObject = (function (RefCount$$1) {
+    function BaseObject() {
+        RefCount$$1.apply(this, arguments);
+        this._bAlive = true;
+    }
+
+    if ( RefCount$$1 ) BaseObject.__proto__ = RefCount$$1;
+    BaseObject.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    BaseObject.prototype.constructor = BaseObject;
+    BaseObject.prototype.alive = function alive () {
+        return this._bAlive;
+    };
+    BaseObject.prototype.destroy = function destroy () {
+        var ret = this._bAlive;
+        this._bAlive = false;
+        return ret;
+    };
+
+    return BaseObject;
+}(RefCount));
+
+// 描画ソートをする為の優先度値など
+// 描画ソートをする為の優先度値など
+var DrawTag = function DrawTag() {
+    this.priority = 0;
+    this.technique = null;
+};
+
+var DObject = (function (BaseObject$$1) {
+    function DObject(tech, priority) {
+        if ( priority === void 0 ) priority = 0;
+
+        BaseObject$$1.call(this);
+        this.drawtag = new DrawTag();
+        this.drawtag.technique = tech;
+        this.drawtag.priority = priority;
+    }
+
+    if ( BaseObject$$1 ) DObject.__proto__ = BaseObject$$1;
+    DObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
+    DObject.prototype.constructor = DObject;
+
+    return DObject;
+}(BaseObject));
+
+var gl;
+function SetGL(g) { gl = g; }
+var engine;
+function SetEngine(e) { engine = e; }
+var resource;
+function SetResource(r) { resource = r; }
+var input;
+function SetInput(i) { input = i; }
+var scene;
+function SetScene(s) { scene = s; }
+var glres;
+function SetGLRes(r) { glres = r; }
+
+var Clear = (function (DObject$$1) {
+    function Clear(color, depth, stencil) {
+        DObject$$1.call(this, null);
+        this.color = color;
+        this.depth = depth;
+        this.stencil = stencil;
+    }
+
+    if ( DObject$$1 ) Clear.__proto__ = DObject$$1;
+    Clear.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    Clear.prototype.constructor = Clear;
+    Clear.prototype.onDraw = function onDraw () {
+        var flag = 0;
+        if (this.color) {
+            var c = this.color;
+            gl.clearColor(c.x, c.y, c.z, c.w);
+            flag |= gl.COLOR_BUFFER_BIT;
+        }
+        if (this.depth) {
+            gl.clearDepth(this.depth);
+            flag |= gl.DEPTH_BUFFER_BIT;
+        }
+        if (this.stencil) {
+            gl.clearStencil(this.stencil);
+            flag |= gl.STENCIL_BUFFER_BIT;
+        }
+        gl.clear(flag);
+    };
+
+    return Clear;
+}(DObject));
 
 var Vec3 = (function (VectorImpl$$1) {
     function Vec3(x, y, z) {
@@ -1107,37 +1131,37 @@ SysUnif3D.prototype.apply = function apply (prog) {
     }
 };
 
-var GLResourceFlag = function GLResourceFlag() {
-    this._bDiscard = false;
-    this._bLost = true;
-};
-// -------------- from Discardable --------------
-GLResourceFlag.prototype.discard = function discard () {
-    Assert(!this.isDiscarded());
-    this._bDiscard = true;
-};
-GLResourceFlag.prototype.isDiscarded = function isDiscarded () {
-    return this._bDiscard;
-};
-// -------------- from GLContext --------------
-GLResourceFlag.prototype.onContextLost = function onContextLost (cb) {
-    Assert(!this.isDiscarded());
-    if (this._bLost)
-        { return; }
-    this._bLost = true;
-    cb();
-};
-GLResourceFlag.prototype.onContextRestored = function onContextRestored (cb) {
-    Assert(!this.isDiscarded());
-    if (!this._bLost)
-        { return; }
-    this._bLost = false;
-    cb();
-};
-GLResourceFlag.prototype.contextLost = function contextLost () {
-    Assert(!this.isDiscarded());
-    return this._bLost;
-};
+var GLResourceBase = (function (RefCount$$1) {
+    function GLResourceBase() {
+        RefCount$$1.apply(this, arguments);
+        this._bLost = true;
+    }
+
+    if ( RefCount$$1 ) GLResourceBase.__proto__ = RefCount$$1;
+    GLResourceBase.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    GLResourceBase.prototype.constructor = GLResourceBase;
+    // -------------- from GLContext --------------
+    GLResourceBase.prototype.onContextLost = function onContextLost (cb) {
+        Assert(this.count() > 0);
+        if (this._bLost)
+            { return; }
+        this._bLost = true;
+        cb();
+    };
+    GLResourceBase.prototype.onContextRestored = function onContextRestored (cb) {
+        Assert(this.count() > 0);
+        if (!this._bLost)
+            { return; }
+        this._bLost = false;
+        cb();
+    };
+    GLResourceBase.prototype.contextLost = function contextLost () {
+        Assert(this.count() > 0);
+        return this._bLost;
+    };
+
+    return GLResourceBase;
+}(RefCount));
 
 var EnumBase;
 (function (EnumBase) {
@@ -1749,177 +1773,185 @@ var Backup;
         Flag[Flag["All"] = 255] = "All";
     })(Flag = Backup.Flag || (Backup.Flag = {}));
 })(Backup || (Backup = {}));
-var GLTexture = function GLTexture() {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._bind = 0;
-    this._size = new Size(0, 0);
-    this._param = [
-        null,
-        new Backup.Filter(false, false, 0),
-        new Backup.Wrap(UVWrap.Clamp, UVWrap.Clamp) ];
-    glres.add(this);
-};
-GLTexture.prototype._typeId = function _typeId () {
-    return GLConst.TextureC.convert(this.typeId());
-};
-GLTexture.prototype._typeQueryId = function _typeQueryId () {
-    return GLConst.TextureQueryC.convert(this.typeQueryId());
-};
-GLTexture.prototype._applyParams = function _applyParams (flag) {
-        var this$1 = this;
-
-    var at = 0x01;
-    for (var i = 0; i < Backup.Flag._Num; i++) {
-        if (flag & at) {
-            var p = this$1._param[i];
-            if (p)
-                { p.apply(this$1); }
-        }
-        at <<= 1;
+var GLTexture = (function (GLResourceBase$$1) {
+    function GLTexture() {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bind = 0;
+        this._size = new Size(0, 0);
+        this._param = [
+            null,
+            new Backup.Filter(false, false, 0),
+            new Backup.Wrap(UVWrap.Clamp, UVWrap.Clamp) ];
+        glres.add(this);
     }
-};
-GLTexture.prototype.uvrect = function uvrect () {
-    return GLTexture.UVRect01;
-};
-GLTexture.prototype.id = function id () {
-    return this._id;
-};
-GLTexture.prototype.size = function size () {
-    return this._size;
-};
-GLTexture.prototype.truesize = function truesize () {
-    return this._size;
-};
-GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
+
+    if ( GLResourceBase$$1 ) GLTexture.__proto__ = GLResourceBase$$1;
+    GLTexture.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLTexture.prototype.constructor = GLTexture;
+    GLTexture.prototype._typeId = function _typeId () {
+        return GLConst.TextureC.convert(this.typeId());
+    };
+    GLTexture.prototype._typeQueryId = function _typeQueryId () {
+        return GLConst.TextureQueryC.convert(this.typeQueryId());
+    };
+    GLTexture.prototype._applyParams = function _applyParams (flag) {
         var this$1 = this;
 
-    this._param[Backup.Index.Filter] = new Backup.Filter(bLMin, bLMag, iMip);
-    this.proc(function () {
-        this$1._applyParams(Backup.Flag.Filter);
-    });
-};
-GLTexture.prototype.setWrap = function setWrap (s, t) {
+        var at = 0x01;
+        for (var i = 0; i < Backup.Flag._Num; i++) {
+            if (flag & at) {
+                var p = this$1._param[i];
+                if (p)
+                    { p.apply(this$1); }
+            }
+            at <<= 1;
+        }
+    };
+    GLTexture.prototype.uvrect = function uvrect () {
+        return GLTexture.UVRect01;
+    };
+    GLTexture.prototype.id = function id () {
+        return this._id;
+    };
+    GLTexture.prototype.size = function size () {
+        return this._size;
+    };
+    GLTexture.prototype.truesize = function truesize () {
+        return this._size;
+    };
+    GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
+        var this$1 = this;
+
+        this._param[Backup.Index.Filter] = new Backup.Filter(bLMin, bLMag, iMip);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.Filter);
+        });
+    };
+    GLTexture.prototype.setWrap = function setWrap (s, t) {
         var this$1 = this;
         if ( t === void 0 ) t = s;
 
-    this._param[Backup.Index.Wrap] = new Backup.Wrap(s, t);
-    this.proc(function () {
-        this$1._applyParams(Backup.Flag.Wrap);
-    });
-};
-GLTexture.prototype.setData = function setData (fmt, width, height, srcFmt, srcFmtType, pixels) {
+        this._param[Backup.Index.Wrap] = new Backup.Wrap(s, t);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.Wrap);
+        });
+    };
+    GLTexture.prototype.setData = function setData (fmt, width, height, srcFmt, srcFmtType, pixels) {
         var this$1 = this;
 
-    Assert(srcFmtType === TexDataFormat.UB);
-    var assign;
+        Assert(srcFmtType === TexDataFormat.UB);
+        var assign;
         (assign = [width, height], this._size.width = assign[0], this._size.height = assign[1]);
-    if (typeof pixels !== "undefined")
-        { pixels = pixels.slice(0); }
-    this._param[Backup.Index.Base] = new Backup.PixelData(this.truesize(), fmt, 1, false, pixels);
-    this.proc(function () {
-        this$1._applyParams(Backup.Flag.All);
-    });
-};
-GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, pixels) {
-        var this$1 = this;
-
-    Assert(srcFmtType === TexDataFormat.UB);
-    var base = this._param[Backup.Index.Base];
-    base.writeSubData(this.truesize().width, rect.left, rect.bottom, rect.width(), pixels);
-    this.proc(function () {
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-        gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.bottom, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
-    });
-};
-GLTexture.prototype.setImage = function setImage (fmt, srcFmt, srcFmtType, obj) {
-        var this$1 = this;
-
-    Assert(srcFmtType === TexDataFormat.UB);
-    obj = obj.cloneNode(true);
-    var assign;
-        (assign = [obj.width, obj.height], this._size.width = assign[0], this._size.height = assign[1]);
-    this._param[Backup.Index.Base] = new Backup.ImageData(fmt, srcFmt, srcFmtType, obj);
-    this.proc(function () {
-        this$1._applyParams(Backup.Flag.All);
-    });
-};
-GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType, obj) {
-        var this$1 = this;
-
-    Assert(srcFmtType === TexDataFormat.UB);
-    this.proc(function () {
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
-    });
-};
-GLTexture.prototype.genMipmap = function genMipmap () {
-        var this$1 = this;
-
-    this.proc(function () {
-        gl.generateMipmap(this$1._typeId());
-    });
-};
-GLTexture.prototype.bind_loose = function bind_loose () {
-    Assert(!this.isDiscarded(), "already discarded");
-    gl.bindTexture(this._typeId(), this.id());
-    ++this._bind;
-};
-// ----------------- from GLContext -----------------
-GLTexture.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-    this._rf.onContextLost(function () {
-        gl.deleteTexture(this$1._id);
-        this$1._id = null;
-    });
-};
-GLTexture.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        this$1._id = gl.createTexture();
-        this$1.proc(function () {
+        if (typeof pixels !== "undefined")
+            { pixels = pixels.slice(0); }
+        this._param[Backup.Index.Base] = new Backup.PixelData(this.truesize(), fmt, 1, false, pixels);
+        this.proc(function () {
             this$1._applyParams(Backup.Flag.All);
         });
-    });
-};
-GLTexture.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
-// ----------------- from Bindable -----------------
-GLTexture.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(this._bind === 0, "already binded");
-    gl.bindTexture(this._typeId(), this.id());
-    ++this._bind;
-};
-GLTexture.prototype.unbind = function unbind (id) {
+    };
+    GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, pixels) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        var base = this._param[Backup.Index.Base];
+        base.writeSubData(this.truesize().width, rect.left, rect.bottom, rect.width(), pixels);
+        this.proc(function () {
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.bottom, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
+        });
+    };
+    GLTexture.prototype.setImage = function setImage (fmt, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        obj = obj.cloneNode(true);
+        var assign;
+        (assign = [obj.width, obj.height], this._size.width = assign[0], this._size.height = assign[1]);
+        this._param[Backup.Index.Base] = new Backup.ImageData(fmt, srcFmt, srcFmtType, obj);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.All);
+        });
+    };
+    GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        this.proc(function () {
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
+        });
+    };
+    GLTexture.prototype.genMipmap = function genMipmap () {
+        var this$1 = this;
+
+        this.proc(function () {
+            gl.generateMipmap(this$1._typeId());
+        });
+    };
+    GLTexture.prototype.bind_loose = function bind_loose () {
+        Assert(this.count() > 0, "already discarded");
+        gl.bindTexture(this._typeId(), this.id());
+        ++this._bind;
+    };
+    // ----------------- from GLContext -----------------
+    GLTexture.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteTexture(this$1._id);
+            this$1._id = null;
+        });
+    };
+    GLTexture.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._id = gl.createTexture();
+            this$1.proc(function () {
+                this$1._applyParams(Backup.Flag.All);
+            });
+        });
+    };
+    // ----------------- from Bindable -----------------
+    GLTexture.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(this._bind === 0, "already binded");
+        gl.bindTexture(this._typeId(), this.id());
+        ++this._bind;
+    };
+    GLTexture.prototype.unbind = function unbind (id) {
         if ( id === void 0 ) id = null;
 
-    Assert(this._bind > 0, "not binded yet");
-    gl.bindTexture(this._typeId(), id);
-    --this._bind;
-};
-GLTexture.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(this._typeQueryId());
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// ----------------- from Discardable -----------------
-GLTexture.prototype.discard = function discard () {
-    Assert(!this._bind, "still binding somewhere");
-    this.onContextLost();
-    this._rf.discard();
-};
-GLTexture.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
+        Assert(this._bind > 0, "not binded yet");
+        gl.bindTexture(this._typeId(), id);
+        --this._bind;
+    };
+    GLTexture.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(this._typeQueryId());
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // ----------------- from GLResourceBase -----------------
+    GLTexture.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+
+    return GLTexture;
+}(GLResourceBase));
 GLTexture.UVRect01 = new Rect(0, 1, 1, 0);
 
 /// <reference path="arrayfunc.ts" />
@@ -2004,17 +2036,594 @@ function ASyncGet(loaders, maxConnection, callback) {
     }
 }
 
-var ResourceWrap = function ResourceWrap(data) {
-    this.data = data;
-    this._bDiscard = false;
+var XHRLoader = function XHRLoader(url, type) {
+    var this$1 = this;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = type;
+    xhr.onprogress = function (e) {
+        if (e.lengthComputable) {
+            this$1._cb.progress(e.loaded, e.total);
+            this$1._loaded = e.loaded;
+            this$1._total = e.total;
+        }
+    };
+    xhr.onload = function () {
+        var xhr = this$1._xhr;
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                this$1._status = "complete";
+                this$1._cb.progress((this$1._loaded >= 0) ? this$1._total : 0, this$1._total);
+                this$1._cb.completed();
+            }
+            else {
+                this$1._status = "error";
+                this$1._errormsg = xhr.statusText;
+                this$1._cb.error();
+            }
+        }
+    };
+    xhr.ontimeout = function (e) {
+        this$1._errormsg = "timeout";
+        this$1._cb.error();
+    };
+    xhr.onerror = function () {
+        this$1._errormsg = "unknown error";
+        this$1._cb.error();
+    };
+    this._status = "idle";
+    this._xhr = xhr;
 };
-// ------------ from Discardable ------------
-ResourceWrap.prototype.isDiscarded = function isDiscarded () {
-    return this._bDiscard;
+XHRLoader.prototype.begin = function begin (callback, timeout) {
+    this._cb = callback;
+    this._status = "loading";
+    this._xhr.timeout = timeout;
+    this._loaded = 0;
+    this._total = 0;
+    callback.progress(this._loaded, this._total);
+    this._xhr.send(null);
 };
-ResourceWrap.prototype.discard = function discard () {
-    Assert(!this._bDiscard, "already discarded");
-    this._bDiscard = true;
+XHRLoader.prototype.abort = function abort () {
+    this._status = "abort";
+    this._xhr.abort();
+};
+XHRLoader.prototype.errormsg = function errormsg () {
+    return this._errormsg;
+};
+XHRLoader.prototype.status = function status () {
+    return this._status;
+};
+XHRLoader.prototype.result = function result () {
+    return this._xhr.response;
+};
+
+var ResourceWrap = (function (RefCount$$1) {
+    function ResourceWrap(data) {
+        RefCount$$1.call(this);
+        this.data = data;
+    }
+
+    if ( RefCount$$1 ) ResourceWrap.__proto__ = RefCount$$1;
+    ResourceWrap.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    ResourceWrap.prototype.constructor = ResourceWrap;
+
+    return ResourceWrap;
+}(RefCount));
+
+ResourceExtToType.def = "JSON";
+ResourceInfo.JSON = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new ResourceWrap(src);
+    }
+};
+
+var ShaderError = (function (Error) {
+    function ShaderError(id) {
+        Error.call(this, "\n"
+            + PaddingString(32, "-")
+            + AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
+            + PaddingString(32, "-")
+            + "\n"
+            + gl.getShaderInfoLog(id)
+            + "\n");
+    }
+
+    if ( Error ) ShaderError.__proto__ = Error;
+    ShaderError.prototype = Object.create( Error && Error.prototype );
+    ShaderError.prototype.constructor = ShaderError;
+
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ShaderError";
+    };
+
+    Object.defineProperties( ShaderError.prototype, prototypeAccessors );
+
+    return ShaderError;
+}(Error));
+var GLShader = (function (GLResourceBase$$1) {
+    function GLShader(src) {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._source = src;
+        glres.add(this);
+    }
+
+    if ( GLResourceBase$$1 ) GLShader.__proto__ = GLResourceBase$$1;
+    GLShader.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLShader.prototype.constructor = GLShader;
+    GLShader.prototype.id = function id () {
+        return this._id;
+    };
+    // --------------- from GLContext ---------------
+    GLShader.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteShader(this$1._id);
+            this$1._id = null;
+        });
+    };
+    GLShader.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            // シェーダーを読み込んでコンパイル
+            var id = gl.createShader(GLConst.ShaderTypeC.convert(this$1.typeId()));
+            gl.shaderSource(id, this$1._source);
+            gl.compileShader(id);
+            if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
+                this$1._id = id;
+            }
+            else {
+                throw new ShaderError(id);
+            }
+        });
+    };
+    // --------------- from GLResourceBase ---------------
+    GLShader.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+
+    return GLShader;
+}(GLResourceBase));
+
+var GLVShader = (function (GLShader$$1) {
+    function GLVShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
+    GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLVShader.prototype.constructor = GLVShader;
+
+    GLVShader.prototype.typeId = function typeId () {
+        return ShaderType.Vertex;
+    };
+
+    return GLVShader;
+}(GLShader));
+
+var GLFShader = (function (GLShader$$1) {
+    function GLFShader () {
+        GLShader$$1.apply(this, arguments);
+    }
+
+    if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
+    GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
+    GLFShader.prototype.constructor = GLFShader;
+
+    GLFShader.prototype.typeId = function typeId () {
+        return ShaderType.Fragment;
+    };
+
+    return GLFShader;
+}(GLShader));
+
+ResourceExtToType.vsh = "VertexShader";
+ResourceExtToType.fsh = "FragmentShader";
+ResourceInfo.VertexShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLVShader(src);
+    }
+};
+ResourceInfo.FragmentShader = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "text");
+    },
+    makeResource: function (src) {
+        return new GLFShader(src);
+    }
+};
+
+var ImageLoader = (function (XHRLoader$$1) {
+    function ImageLoader(url) {
+        XHRLoader$$1.call(this, url, "blob");
+    }
+
+    if ( XHRLoader$$1 ) ImageLoader.__proto__ = XHRLoader$$1;
+    ImageLoader.prototype = Object.create( XHRLoader$$1 && XHRLoader$$1.prototype );
+    ImageLoader.prototype.constructor = ImageLoader;
+    ImageLoader.prototype.begin = function begin (callback, timeout) {
+        var this$1 = this;
+
+        XHRLoader$$1.prototype.begin.call(this, {
+            completed: function () {
+                var img = new Image();
+                this$1._img = img;
+                img.src = window.URL.createObjectURL(XHRLoader$$1.prototype.result.call(this$1));
+                img.onload = function () {
+                    callback.completed();
+                };
+            },
+            error: callback.error,
+            progress: callback.progress
+        }, timeout);
+    };
+    ImageLoader.prototype.result = function result () {
+        return this._img;
+    };
+
+    return ImageLoader;
+}(XHRLoader));
+
+var GLTexture2D = (function (GLTexture$$1) {
+    function GLTexture2D () {
+        GLTexture$$1.apply(this, arguments);
+    }
+
+    if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
+    GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
+    GLTexture2D.prototype.constructor = GLTexture2D;
+
+    GLTexture2D.prototype.typeId = function typeId () {
+        return TextureType.Texture2D;
+    };
+    GLTexture2D.prototype.typeQueryId = function typeQueryId () {
+        return TextureQuery.Texture2D;
+    };
+
+    return GLTexture2D;
+}(GLTexture));
+
+ResourceExtToType.png = "Image";
+ResourceExtToType.jpg = "Image";
+ResourceInfo.Image = {
+    makeLoader: function (url) {
+        return new ImageLoader(url);
+    },
+    makeResource: function (src) {
+        var tex = new GLTexture2D();
+        tex.setImage(InterFormat.RGBA, InterFormat.RGBA, TexDataFormat.UB, src);
+        return tex;
+    }
+};
+
+var ProgramError = (function (Error) {
+    function ProgramError(id) {
+        Error.call(this, gl.getProgramInfoLog(id));
+    }
+
+    if ( Error ) ProgramError.__proto__ = Error;
+    ProgramError.prototype = Object.create( Error && Error.prototype );
+    ProgramError.prototype.constructor = ProgramError;
+
+    var prototypeAccessors = { name: {} };
+    prototypeAccessors.name.get = function () {
+        return "ProgramError";
+    };
+
+    Object.defineProperties( ProgramError.prototype, prototypeAccessors );
+
+    return ProgramError;
+}(Error));
+var GLProgram = (function (GLResourceBase$$1) {
+    function GLProgram(vs, fs) {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bBind = false;
+        this._vs = vs;
+        this._fs = fs;
+        glres.add(this);
+    }
+
+    if ( GLResourceBase$$1 ) GLProgram.__proto__ = GLResourceBase$$1;
+    GLProgram.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLProgram.prototype.constructor = GLProgram;
+    GLProgram.prototype.id = function id () {
+        return this._id;
+    };
+    GLProgram.prototype.hasUniform = function hasUniform (name) {
+        return this._uniform[name] !== undefined;
+    };
+    /*!
+        \param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
+    */
+    GLProgram.prototype.setUniform = function setUniform (name, value) {
+        var u = this._uniform[name];
+        if (u) {
+            Assert(!(value instanceof Array));
+            var f = u.type.uniformF;
+            var fa = u.type.uniformAF;
+            // matrix or vector or float or int
+            if (IsMatrix(value))
+                { fa.call(gl, u.index, false, value.value); }
+            else if (IsVector(value))
+                { fa.call(gl, u.index, value.value); }
+            else
+                { f.call(gl, u.index, value); }
+            return;
+        }
+        u = this._uniform[name + "[0]"];
+        if (u) {
+            Assert(value instanceof Array);
+            var fa$1 = u.type.uniformAF;
+            if (IsVM(value[0])) {
+                // [matrix...] or [vector...]
+                var ar = value;
+                fa$1.call(gl, u.index, VMToArray(ar));
+            }
+            else {
+                fa$1.call(gl, u.index, value);
+            }
+        }
+    };
+    /*!
+        \param[in] data	[vector...] or GLVBuffer
+    */
+    GLProgram.prototype.setVStream = function setVStream (name, data) {
+        var a = this._attribute[name];
+        if (a) {
+            if (data instanceof Array) {
+                // [vector...]
+                a.type.vertexF(a.index, VectorToArray.apply(void 0, data));
+            }
+            else {
+                var data2 = data;
+                // GLVBuffer
+                data2.proc(function () {
+                    gl.enableVertexAttribArray(a.index);
+                    var info = data2.typeinfo();
+                    gl.vertexAttribPointer(a.index, data2.dim(), info.id, false, info.bytesize * data2.dim(), 0);
+                });
+            }
+            return a.index;
+        }
+    };
+    // ------------- from Bindable -------------
+    GLProgram.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(!this._bBind, "already binded");
+        gl.useProgram(this.id());
+        this._bBind = true;
+    };
+    GLProgram.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+        Assert(this._bBind, "not binding anywhere");
+        gl.useProgram(id);
+        this._bBind = false;
+    };
+    GLProgram.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(gl.CURRENT_PROGRAM);
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // ------------- from GLResourceBase -------------
+    GLProgram.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bBind);
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+    // ------------- from GLContext -------------
+    GLProgram.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteProgram(this$1.id());
+            this$1._id = null;
+        });
+    };
+    GLProgram.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            if (this$1._vs.contextLost())
+                { this$1._vs.onContextRestored(); }
+            if (this$1._fs.contextLost())
+                { this$1._fs.onContextRestored(); }
+            var prog = gl.createProgram();
+            gl.attachShader(prog, this$1._vs.id());
+            gl.attachShader(prog, this$1._fs.id());
+            gl.linkProgram(prog);
+            if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+                this$1._id = prog;
+            }
+            else
+                { throw new ProgramError(prog); }
+            {
+                var attr = {};
+                var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
+                for (var i = 0; i < nAtt; i++) {
+                    var a = gl.getActiveAttrib(prog, i);
+                    var typ = GLConst.GLSLTypeInfo[a.type];
+                    attr[a.name] = {
+                        index: gl.getAttribLocation(prog, a.name),
+                        size: a.size,
+                        type: typ
+                    };
+                    Assert(attr[a.name].type !== undefined);
+                }
+                this$1._attribute = attr;
+            }
+            {
+                var unif = {};
+                var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+                for (var i$1 = 0; i$1 < nUnif; i$1++) {
+                    var u = gl.getActiveUniform(prog, i$1);
+                    unif[u.name] = {
+                        index: gl.getUniformLocation(prog, u.name),
+                        size: u.size,
+                        type: GLConst.GLSLTypeInfo[u.type]
+                    };
+                    Assert(unif[u.name].type !== undefined);
+                }
+                this$1._uniform = unif;
+            }
+        });
+    };
+
+    return GLProgram;
+}(GLResourceBase));
+
+function ToLowercaseKeys(ar) {
+    var ret = {};
+    Object.keys(ar).forEach(function (k) {
+        var val = ar[k];
+        if (typeof val === "string")
+            { val = val.toLowerCase(); }
+        else if (val instanceof Array) {
+            for (var i = 0; i < val.length; i++) {
+                if (typeof val[i] === "string")
+                    { val[i] = val[i].toLowerCase(); }
+            }
+        }
+        ret[k.toLowerCase()] = val;
+    });
+    return ret;
+}
+var GLValueSet = function GLValueSet () {};
+
+GLValueSet.FromJSON = function FromJSON (js) {
+    var ret = new GLValueSet();
+    var bs = js.boolset;
+    var bsf = {};
+    for (var i = 0; i < bs.length; i++) {
+        bsf[bs[i]] = true;
+    }
+    ret._boolset = ToLowercaseKeys(bsf);
+    ret._valueset = ToLowercaseKeys(js.valueset);
+    return ret;
+};
+GLValueSet.prototype.enable = function enable (name) {
+    this._boolset[name] = true;
+};
+GLValueSet.prototype.disable = function disable (name) {
+    delete this._boolset[name];
+};
+GLValueSet.prototype.apply = function apply () {
+        var this$1 = this;
+
+    // boolset
+    for (var i = 0; i < BoolString.length; i++) {
+        var key = BoolString[i];
+        var func = (this$1._boolset[key] === true) ? gl.enable : gl.disable;
+        func.call(gl, GLConst.BoolSettingC.convert(i + 34359738368 /* Num */));
+    }
+    // valueset
+    for (var k in this$1._valueset) {
+        var args = this$1._valueset[k];
+        var func$1 = GLConst.ValueSetting[k];
+        if (args instanceof Array)
+            { func$1.call(gl, args[0], args[1], args[2], args[3]); }
+        else
+            { func$1.call(gl, args); }
+    }
+};
+
+/// <reference path="arrayfunc.ts" />
+var Technique = (function (ResourceWrap$$1) {
+    function Technique(src) {
+        ResourceWrap$$1.call(this, null);
+        // 必要なリソースが揃っているかのチェック
+        var later = this._checkResource(src);
+        if (!later.empty())
+            { throw new (Function.prototype.bind.apply( MoreResource, [ null ].concat( later) )); }
+        // 実際のローディング
+        this._loadResource(src);
+    }
+
+    if ( ResourceWrap$$1 ) Technique.__proto__ = ResourceWrap$$1;
+    Technique.prototype = Object.create( ResourceWrap$$1 && ResourceWrap$$1.prototype );
+    Technique.prototype.constructor = Technique;
+    Technique.prototype._checkResource = function _checkResource (src) {
+        var later = [];
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            var chk = function (key) {
+                if (!resource.checkResource(key))
+                    { later.push(key); }
+            };
+            if (v.valueset instanceof Object) {
+                Assert(v.boolset instanceof Object);
+            }
+            else
+                { chk(v.valueset); }
+            chk(v.vshader);
+            chk(v.fshader);
+        });
+        return later;
+    };
+    Technique.prototype._loadResource = function _loadResource (src) {
+        var tech = {};
+        Object.keys(src.technique).forEach(function (k) {
+            var v = src.technique[k];
+            var vs;
+            if (v.valueset instanceof Object) {
+                vs = GLValueSet.FromJSON({
+                    boolset: v.boolset,
+                    valueset: v.valueset
+                });
+            }
+            else {
+                vs = GLValueSet.FromJSON(resource.getResource(v.valueset).data);
+            }
+            tech[k] = {
+                valueset: vs,
+                program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
+            };
+        });
+        this._tech = tech;
+    };
+
+    Technique.prototype.technique = function technique () {
+        return this._tech;
+    };
+
+    return Technique;
+}(ResourceWrap));
+
+ResourceExtToType.prog = "Technique";
+ResourceInfo.Technique = {
+    makeLoader: function (url) {
+        return new XHRLoader(url, "json");
+    },
+    makeResource: function (src) {
+        return new Technique(src);
+    }
 };
 
 /// <reference path="arrayfunc.ts" />
@@ -2052,7 +2661,7 @@ var RState;
     State.prototype.popFrame = function popFrame (self, n) {
         AssertF("invalid function call");
     };
-    State.prototype.discard = function discard (self) {
+    State.prototype.discard = function discard (self, cb) {
         AssertF("invalid function call");
     };
     RState.State = State;
@@ -2175,8 +2784,8 @@ var RState;
 
             while (n > 0) loop();
         };
-        IdleState.prototype.discard = function discard (self) {
-            self._df.discard();
+        IdleState.prototype.discard = function discard (self, cb) {
+            self._discard(cb);
         };
 
         return IdleState;
@@ -2225,101 +2834,109 @@ var RState;
     RState.RestoreingState = RestoreingState;
 })(RState || (RState = {}));
 // リソースをレイヤに分けて格納
-var ResStack = function ResStack(base) {
-    this._df = new ResourceWrap(null);
-    this._resource = [];
-    // リソース名 -> リソースパス
-    this._alias = {};
-    // 現在のステート
-    this._state = new RState.IdleState();
-    this._base = base;
-    this._pushFrame();
-};
-ResStack.prototype.addAlias = function addAlias (alias) {
-    this._state.addAlias(this, alias);
-};
-ResStack.prototype._makeFPath = function _makeFPath (name) {
-    Assert(typeof this._alias[name] !== "undefined");
-    return ((this._base) + "/" + (this._alias[name]));
-};
-ResStack.prototype._pushFrame = function _pushFrame () {
-    var dst = new ResLayer();
-    this._resource.push(dst);
-    return dst;
-};
-ResStack.prototype.state = function state () {
-    return this._state.state();
-};
-// フレーム単位でリソースロード
-/*
-    \param[in] res ["AliasName", ...]
-*/
-ResStack.prototype.loadFrame = function loadFrame (res, callback, bSame) {
+var ResStack = (function (RefCount$$1) {
+    function ResStack(base) {
+        RefCount$$1.call(this);
+        this._resource = [];
+        // リソース名 -> リソースパス
+        this._alias = {};
+        // 現在のステート
+        this._state = new RState.IdleState();
+        this._base = base;
+        this._pushFrame();
+    }
+
+    if ( RefCount$$1 ) ResStack.__proto__ = RefCount$$1;
+    ResStack.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    ResStack.prototype.constructor = ResStack;
+    ResStack.prototype.addAlias = function addAlias (alias) {
+        this._state.addAlias(this, alias);
+    };
+    ResStack.prototype._makeFPath = function _makeFPath (name) {
+        Assert(typeof this._alias[name] !== "undefined");
+        return ((this._base) + "/" + (this._alias[name]));
+    };
+    ResStack.prototype._pushFrame = function _pushFrame () {
+        var dst = new ResLayer();
+        this._resource.push(dst);
+        return dst;
+    };
+    ResStack.prototype.state = function state () {
+        return this._state.state();
+    };
+    // フレーム単位でリソースロード
+    /*
+        \param[in] res ["AliasName", ...]
+    */
+    ResStack.prototype.loadFrame = function loadFrame (res, callback, bSame) {
         if ( bSame === void 0 ) bSame = false;
 
-    this._state.loadFrame(this, res, callback, bSame);
-};
-// リソースレイヤの数
-ResStack.prototype.resourceLength = function resourceLength () {
-    return this._state.resourceLength(this);
-};
-ResStack.prototype._checkResourceSingle = function _checkResourceSingle (name) {
-    try {
-        this.getResource(name);
-    }
-    catch (e) {
-        return false;
-    }
-    return true;
-};
-// あるリソースを持っているかの確認(リスト対応)
-ResStack.prototype.checkResource = function checkResource (name) {
-        var this$1 = this;
-
-    if (name instanceof Array) {
-        for (var i = 0; i < name.length; i++) {
-            if (!this$1._checkResourceSingle(name[i]))
-                { return false; }
+        this._state.loadFrame(this, res, callback, bSame);
+    };
+    // リソースレイヤの数
+    ResStack.prototype.resourceLength = function resourceLength () {
+        return this._state.resourceLength(this);
+    };
+    ResStack.prototype._checkResourceSingle = function _checkResourceSingle (name) {
+        try {
+            this.getResource(name);
+        }
+        catch (e) {
+            return false;
         }
         return true;
-    }
-    return this._checkResourceSingle(name);
-};
-ResStack.prototype.getResource = function getResource (name) {
-    var resA = this._resource;
-    for (var i = resA.length - 1; i >= 0; --i) {
-        var res = resA[i];
-        var r = res.resource[name];
-        if (r)
-            { return r; }
-    }
-    throw new NoSuchResource(name);
-};
-// 外部で生成したリソースをレイヤーに格納
-ResStack.prototype.addResource = function addResource (key, val) {
-    // リソース名の重複は許容
-    if (this.checkResource(key))
-        { return; }
-    this._resource[this._resource.length - 1].resource[key] = val;
-};
-ResStack.prototype.popFrame = function popFrame (n) {
+    };
+    // あるリソースを持っているかの確認(リスト対応)
+    ResStack.prototype.checkResource = function checkResource (name) {
+        var this$1 = this;
+
+        if (name instanceof Array) {
+            for (var i = 0; i < name.length; i++) {
+                if (!this$1._checkResourceSingle(name[i]))
+                    { return false; }
+            }
+            return true;
+        }
+        return this._checkResourceSingle(name);
+    };
+    ResStack.prototype.getResource = function getResource (name) {
+        var resA = this._resource;
+        for (var i = resA.length - 1; i >= 0; --i) {
+            var res = resA[i];
+            var r = res.resource[name];
+            if (r)
+                { return r; }
+        }
+        throw new NoSuchResource(name);
+    };
+    // 外部で生成したリソースをレイヤーに格納
+    ResStack.prototype.addResource = function addResource (key, val) {
+        // リソース名の重複は許容
+        if (this.checkResource(key))
+            { return; }
+        this._resource[this._resource.length - 1].resource[key] = val;
+    };
+    ResStack.prototype.popFrame = function popFrame (n) {
         if ( n === void 0 ) n = 1;
 
-    this._state.popFrame(this, n);
-};
-ResStack.prototype._forEach = function _forEach (n, cb) {
-    var r = this._resource[n].resource;
-    Object.keys(r).forEach(function (k) {
-        cb(r[k]);
-    });
-};
-// ------------ from Discardable ------------
-ResStack.prototype.discard = function discard () {
-    this._state.discard(this);
-};
-ResStack.prototype.isDiscarded = function isDiscarded () {
-    return this._df.isDiscarded();
-};
+        this._state.popFrame(this, n);
+    };
+    ResStack.prototype._forEach = function _forEach (n, cb) {
+        var r = this._resource[n].resource;
+        Object.keys(r).forEach(function (k) {
+            cb(r[k]);
+        });
+    };
+    ResStack.prototype._discard = function _discard (cb) {
+        RefCount$$1.prototype.discard.call(this, cb);
+    };
+    // ------------ from RefCount ------------
+    ResStack.prototype.discard = function discard (cb) {
+        this._state.discard(this, cb);
+    };
+
+    return ResStack;
+}(RefCount));
 
 var ResourceGenSrc = {};
 var ResourceGen = (function () {
@@ -2642,163 +3259,174 @@ InputFlag.prototype.positionDelta = function positionDelta () {
     return this._positionDelta;
 };
 
-var InputMgr = function InputMgr() {
-    var this$1 = this;
+var InputMgr = (function (RefCount$$1) {
+    function InputMgr() {
+        var this$1 = this;
 
-    this._cur = new InputBuff();
-    this._prev = new InputBuff();
-    this._switchBuff();
-    this._flag = new InputFlag();
-    this._bDiscard = false;
-    this._events = {
-        mousedown: function (e) {
-            this$1._cur.mkey[e.button] = true;
-        },
-        mouseup: function (e) {
-            this$1._cur.mkey[e.button] = false;
-        },
-        mousemove: function (e) {
-            this$1._cur.pos = new Vec2(e.pageX, e.pageY);
-        },
-        keydown: function (e) {
-            this$1._cur.key[e.keyCode] = true;
-        },
-        keyup: function (e) {
-            this$1._cur.key[e.keyCode] = false;
-        },
-        wheel: function (e) {
-            this$1._cur.wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
-        },
-        dblclick: function (e) {
-            this$1._cur.dblClick = 0x01;
-        },
-        touchstart: function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var me = e.changedTouches[0];
-            var p = new Vec2(me.pageX, me.pageY);
-            this$1._prev.pos = this$1._cur.pos = p;
-            this$1._cur.mkey[0] = true;
-            return false;
-        },
-        touchmove: function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var me = e.changedTouches[0];
-            this$1._cur.pos = new Vec2(me.pageX, me.pageY);
-            return false;
-        },
-        touchend: function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            this$1._cur.mkey[0] = false;
-            return false;
-        },
-        touchcancel: function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            this$1._cur.mkey[0] = false;
-            return false;
+        RefCount$$1.call(this);
+        this._cur = new InputBuff();
+        this._prev = new InputBuff();
+        this._switchBuff();
+        this._flag = new InputFlag();
+        this._events = {
+            mousedown: function (e) {
+                this$1._cur.mkey[e.button] = true;
+            },
+            mouseup: function (e) {
+                this$1._cur.mkey[e.button] = false;
+            },
+            mousemove: function (e) {
+                this$1._cur.pos = new Vec2(e.pageX, e.pageY);
+            },
+            keydown: function (e) {
+                this$1._cur.key[e.keyCode] = true;
+            },
+            keyup: function (e) {
+                this$1._cur.key[e.keyCode] = false;
+            },
+            wheel: function (e) {
+                this$1._cur.wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
+            },
+            dblclick: function (e) {
+                this$1._cur.dblClick = 0x01;
+            },
+            touchstart: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var me = e.changedTouches[0];
+                var p = new Vec2(me.pageX, me.pageY);
+                this$1._prev.pos = this$1._cur.pos = p;
+                this$1._cur.mkey[0] = true;
+                return false;
+            },
+            touchmove: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var me = e.changedTouches[0];
+                this$1._cur.pos = new Vec2(me.pageX, me.pageY);
+                return false;
+            },
+            touchend: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                this$1._cur.mkey[0] = false;
+                return false;
+            },
+            touchcancel: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                this$1._cur.mkey[0] = false;
+                return false;
+            }
+        };
+        this._registerEvent();
+    }
+
+    if ( RefCount$$1 ) InputMgr.__proto__ = RefCount$$1;
+    InputMgr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    InputMgr.prototype.constructor = InputMgr;
+    InputMgr.prototype.lockPointer = function lockPointer (elem) {
+        var api = [
+            "requestPointerLock",
+            "webkitRequestPointerLock",
+            "mozRequestPointerLock"
+        ];
+        var len = api.length;
+        for (var i = 0; i < len; i++) {
+            if (elem[api[i]]) {
+                elem[api[i]]();
+                return;
+            }
+        }
+        Assert(false, "pointer lock API not found");
+    };
+    InputMgr.prototype.unlockPointer = function unlockPointer () {
+        var api = [
+            "exitPointerLock",
+            "webkitExitPointerLock",
+            "mozExitPointerLock"
+        ];
+        var len = api.length;
+        for (var i = 0; i < len; i++) {
+            if (document[api[i]]) {
+                document[api[i]]();
+                return;
+            }
+        }
+        Assert(false, "pointer lock API not found");
+    };
+    InputMgr.prototype._registerEvent = function _registerEvent () {
+        var this$1 = this;
+
+        var param = { capture: true, passive: false };
+        for (var k in this$1._events) {
+            document.addEventListener(k, this$1._events[k], param);
         }
     };
-    this._registerEvent();
-};
-InputMgr.prototype.lockPointer = function lockPointer (elem) {
-    var api = [
-        "requestPointerLock",
-        "webkitRequestPointerLock",
-        "mozRequestPointerLock"
-    ];
-    var len = api.length;
-    for (var i = 0; i < len; i++) {
-        if (elem[api[i]]) {
-            elem[api[i]]();
-            return;
-        }
-    }
-    Assert(false, "pointer lock API not found");
-};
-InputMgr.prototype.unlockPointer = function unlockPointer () {
-    var api = [
-        "exitPointerLock",
-        "webkitExitPointerLock",
-        "mozExitPointerLock"
-    ];
-    var len = api.length;
-    for (var i = 0; i < len; i++) {
-        if (document[api[i]]) {
-            document[api[i]]();
-            return;
-        }
-    }
-    Assert(false, "pointer lock API not found");
-};
-InputMgr.prototype._registerEvent = function _registerEvent () {
+    InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
         var this$1 = this;
 
-    var param = { capture: true, passive: false };
-    for (var k in this$1._events) {
-        document.addEventListener(k, this$1._events[k], param);
-    }
-};
-InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
+        for (var k in this$1._events) {
+            document.removeEventListener(k, this$1._events[k]);
+        }
+    };
+    InputMgr.prototype._switchBuff = function _switchBuff () {
+        this._prev = this._cur;
+        this._cur = new InputBuff();
+    };
+    InputMgr.prototype.update = function update () {
+        this._flag.update(this._cur);
+        this._switchBuff();
+    };
+    InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) {
+        return this._flag.isMKeyPressed(code);
+    };
+    InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) {
+        return this._flag.isMKeyPressing(code);
+    };
+    InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) {
+        return this._flag.isMKeyClicked(code);
+    };
+    InputMgr.prototype.hideMState = function hideMState (code) {
+        this._flag.hideMState(code);
+    };
+    InputMgr.prototype.isKeyPressed = function isKeyPressed (code) {
+        return this._flag.isKeyPressed(code);
+    };
+    InputMgr.prototype.isKeyPressing = function isKeyPressing (code) {
+        return this._flag.isKeyPressing(code);
+    };
+    InputMgr.prototype.isKeyClicked = function isKeyClicked (code) {
+        return this._flag.isKeyClicked(code);
+    };
+    InputMgr.prototype.hideState = function hideState (code) {
+        this._flag.hideState(code);
+    };
+    InputMgr.prototype.positionDelta = function positionDelta () {
+        return this._flag.positionDelta();
+    };
+    InputMgr.prototype.position = function position () {
+        return this._flag.position();
+    };
+    InputMgr.prototype.doubleClicked = function doubleClicked () {
+        return this._flag.doubleClicked();
+    };
+    InputMgr.prototype.wheelDelta = function wheelDelta () {
+        return this._flag.wheelDelta();
+    };
+    // ---------------- from GLResourceBase ----------------
+    InputMgr.prototype.discard = function discard (cb) {
         var this$1 = this;
 
-    for (var k in this$1._events) {
-        document.removeEventListener(k, this$1._events[k]);
-    }
-};
-InputMgr.prototype._switchBuff = function _switchBuff () {
-    this._prev = this._cur;
-    this._cur = new InputBuff();
-};
-InputMgr.prototype.update = function update () {
-    this._flag.update(this._cur);
-    this._switchBuff();
-};
-InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) {
-    return this._flag.isMKeyPressed(code);
-};
-InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) {
-    return this._flag.isMKeyPressing(code);
-};
-InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) {
-    return this._flag.isMKeyClicked(code);
-};
-InputMgr.prototype.hideMState = function hideMState (code) {
-    this._flag.hideMState(code);
-};
-InputMgr.prototype.isKeyPressed = function isKeyPressed (code) {
-    return this._flag.isKeyPressed(code);
-};
-InputMgr.prototype.isKeyPressing = function isKeyPressing (code) {
-    return this._flag.isKeyPressing(code);
-};
-InputMgr.prototype.isKeyClicked = function isKeyClicked (code) {
-    return this._flag.isKeyClicked(code);
-};
-InputMgr.prototype.hideState = function hideState (code) {
-    this._flag.hideState(code);
-};
-InputMgr.prototype.positionDelta = function positionDelta () {
-    return this._flag.positionDelta();
-};
-InputMgr.prototype.position = function position () {
-    return this._flag.position();
-};
-InputMgr.prototype.doubleClicked = function doubleClicked () {
-    return this._flag.doubleClicked();
-};
-InputMgr.prototype.wheelDelta = function wheelDelta () {
-    return this._flag.wheelDelta();
-};
-// ---------------- from Discardable ----------------
-InputMgr.prototype.isDiscarded = function isDiscarded () {
-    return this._bDiscard;
-};
-InputMgr.prototype.discard = function discard () {
-    this._unregisterEvent();
-};
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1._unregisterEvent();
+        });
+    };
+
+    return InputMgr;
+}(RefCount));
 
 var GObject = (function (BaseObject$$1) {
     function GObject(priority) {
@@ -2863,9 +3491,9 @@ var FSMachine = (function (GObject$$1) {
     FSMachine.prototype.onUp = function onUp () {
         this._state.onUp(this);
     };
-    FSMachine.prototype.discard = function discard () {
-        if (this.alive()) {
-            GObject$$1.prototype.discard.call(this);
+    // --------------- from BaseObject ---------------
+    FSMachine.prototype.destroy = function destroy () {
+        if (GObject$$1.prototype.destroy.call(this)) {
             this.setState(EndState);
             this._doSwitchState();
             return true;
@@ -2876,70 +3504,103 @@ var FSMachine = (function (GObject$$1) {
     return FSMachine;
 }(GObject));
 
-var Group = function Group() {
-    this._group = [];
-    this._add = null;
-    this._remove = null;
-};
-Group.prototype.group = function group () { return this._group; };
-Group.prototype._doAdd = function _doAdd (cbAdd) {
-        var this$1 = this;
-
-    var addL = this._add;
-    if (addL) {
-        addL.forEach(function (obj) {
-            cbAdd(obj, this$1);
-            this$1._group.push(obj);
-        });
+var Group = (function (RefCount$$1) {
+    function Group() {
+        RefCount$$1.apply(this, arguments);
+        this._group = [];
         this._add = null;
-        return true;
+        this._remove = null;
     }
-    return false;
-};
-Group.prototype._removeSingle = function _removeSingle (obj) {
-    // 線形探索
-    var g = this._group;
-    var len = g.length;
-    for (var i = 0; i < len; i++) {
-        if (g[i] === obj)
-            { g.splice(i, 1); }
-    }
-};
-Group.prototype._doRemove = function _doRemove () {
+
+    if ( RefCount$$1 ) Group.__proto__ = RefCount$$1;
+    Group.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    Group.prototype.constructor = Group;
+    Group.prototype.group = function group () { return this._group; };
+    Group.prototype._doAdd = function _doAdd (cbAdd) {
         var this$1 = this;
 
-    var remL = this._remove;
-    if (remL) {
-        var len = remL.length;
-        for (var i = 0; i < len; i++)
-            { this$1._removeSingle(remL[i]); }
-        this._remove = null;
-        return true;
-    }
-    return false;
-};
-Group.prototype._sort = function _sort (cbSort) {
-    this._group.sort(cbSort);
-};
-Group.prototype.doAddRemove = function doAddRemove (cbAdd) {
-    return this._doAdd(cbAdd) || this._doRemove();
-};
-Group.prototype.proc = function proc (cbAdd, cbSort, bRefr) {
-    if (this.doAddRemove(cbAdd) || bRefr) {
-        if (cbSort)
-            { this._sort(cbSort); }
-    }
-};
-Group.prototype.add = function add (obj) {
-    if (!this._add)
-        { this._add = []; }
-    this._add.push(obj);
-};
-Group.prototype.remove = function remove (obj) {
-    if (!this._remove)
-        { this._remove = []; }
-    this._remove.push(obj);
-};
+        var addL = this._add;
+        if (addL) {
+            addL.forEach(function (obj) {
+                cbAdd(obj, this$1);
+                this$1._group.push(obj);
+            });
+            this._add = null;
+            return true;
+        }
+        return false;
+    };
+    Group.prototype._removeSingle = function _removeSingle (obj) {
+        // 線形探索
+        var g = this._group;
+        var len = g.length;
+        for (var i = 0; i < len; i++) {
+            if (g[i] === obj) {
+                g[i].discard();
+                g.splice(i, 1);
+            }
+        }
+    };
+    Group.prototype._doRemove = function _doRemove () {
+        var this$1 = this;
+
+        var remL = this._remove;
+        if (remL) {
+            var len = remL.length;
+            for (var i = 0; i < len; i++)
+                { this$1._removeSingle(remL[i]); }
+            this._remove = null;
+            return true;
+        }
+        return false;
+    };
+    Group.prototype._sort = function _sort (cbSort) {
+        this._group.sort(cbSort);
+    };
+    Group.prototype.doAddRemove = function doAddRemove (cbAdd) {
+        return this._doAdd(cbAdd) || this._doRemove();
+    };
+    Group.prototype.proc = function proc (cbAdd, cbSort, bRefr) {
+        if (this.doAddRemove(cbAdd) || bRefr) {
+            if (cbSort)
+                { this._sort(cbSort); }
+        }
+    };
+    Group.prototype.add = function add (obj) {
+        if (!this._add)
+            { this._add = []; }
+        obj.acquire();
+        this._add.push(obj);
+    };
+    Group.prototype.remove = function remove (obj) {
+        if (!this._remove)
+            { this._remove = []; }
+        this._remove.push(obj);
+    };
+    Group.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            var g = this$1._group;
+            for (var i = 0; i < g.length; i++) {
+                g[i].discard();
+            }
+            this$1._group = [];
+            var a = this$1._add;
+            if (a) {
+                for (var i$1 = 0; i$1 < a.length; i$1++) {
+                    a[i$1].discard();
+                }
+                this$1._add = null;
+            }
+            this$1._remove = null;
+        });
+    };
+
+    return Group;
+}(RefCount));
 
 var UpdGroup = (function (GObject$$1) {
     function UpdGroup(p) {
@@ -2974,6 +3635,16 @@ var UpdGroup = (function (GObject$$1) {
         }
         this._doAddRemove();
         return true;
+    };
+    // ------------ from GObject ------------
+    UpdGroup.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GObject$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.group.discard();
+        });
     };
 
     return UpdGroup;
@@ -3016,35 +3687,91 @@ var DrawGroup = (function (DObject$$1) {
         }
         this._proc();
     };
+    DrawGroup.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        DObject$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.group.discard();
+        });
+    };
 
     return DrawGroup;
 }(DObject));
 
+var SharedPtr = (function (RefCount$$1) {
+    function SharedPtr(target) {
+        RefCount$$1.call(this);
+        this.set(target);
+    }
+
+    if ( RefCount$$1 ) SharedPtr.__proto__ = RefCount$$1;
+    SharedPtr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    SharedPtr.prototype.constructor = SharedPtr;
+    SharedPtr.prototype.set = function set (t) {
+        if (this._target)
+            { this._target.discard(); }
+        if (t)
+            { t.acquire(); }
+        this._target = t;
+    };
+    SharedPtr.prototype.get = function get () {
+        return this._target;
+    };
+    SharedPtr.prototype.reset = function reset () {
+        this.set();
+    };
+    // -------- from RefCount --------
+    SharedPtr.prototype.discard = function discard () {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (this$1._target)
+                { this$1._target.discard(); }
+            this$1._target = undefined;
+        });
+    };
+
+    return SharedPtr;
+}(RefCount));
+
 var Scene = (function (FSMachine$$1) {
     function Scene() {
         FSMachine$$1.apply(this, arguments);
-        this.updateTarget = new UpdGroup(0);
-        this.drawTarget = new DrawGroup();
+        this.updateTarget = new SharedPtr(new UpdGroup(0));
+        this.drawTarget = new SharedPtr(new DrawGroup());
     }
 
     if ( FSMachine$$1 ) Scene.__proto__ = FSMachine$$1;
     Scene.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
     Scene.prototype.constructor = Scene;
     Scene.prototype.asUpdateGroup = function asUpdateGroup () {
-        Assert(this.updateTarget instanceof UpdGroup);
-        return this.updateTarget;
+        Assert(this.updateTarget.get() instanceof UpdGroup);
+        return this.updateTarget.get();
     };
     Scene.prototype.asDrawGroup = function asDrawGroup () {
-        Assert(this.drawTarget instanceof DrawGroup);
-        return this.drawTarget;
+        Assert(this.drawTarget.get() instanceof DrawGroup);
+        return this.drawTarget.get();
     };
     Scene.prototype.onUpdate = function onUpdate (dt) {
         FSMachine$$1.prototype.onUpdate.call(this, dt);
-        this.updateTarget.onUpdate(dt);
+        this.updateTarget.get().onUpdate(dt);
         return true;
     };
     Scene.prototype.onDraw = function onDraw () {
-        this.drawTarget.onDraw();
+        this.drawTarget.get().onDraw();
+    };
+    // ----------------- from Drawable|Updatable -----------------
+    Scene.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        FSMachine$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.updateTarget.discard();
+            this$1.drawTarget.discard();
+        });
     };
 
     return Scene;
@@ -3068,6 +3795,7 @@ var SceneMgr = (function (GObject$$1) {
         this._nPop = 0;
         this._state = SceneMgrState.Idle;
         this._bSwitch = false;
+        firstScene.acquire();
         this.push(firstScene, false);
         firstScene.onUp();
         this._proceed();
@@ -3084,6 +3812,7 @@ var SceneMgr = (function (GObject$$1) {
         Assert(!this._nextScene);
         // popした後に積むのも禁止
         Assert(this._nPop === 0);
+        scene.acquire();
         this._nextScene = scene;
         this._bSwitch = bPop;
         this._nPop = bPop ? 1 : 0;
@@ -3109,8 +3838,7 @@ var SceneMgr = (function (GObject$$1) {
         while (this._nPop > 0) {
             --this$1._nPop;
             b = true;
-            var t = this$1._scene.pop();
-            t.discard();
+            this$1._scene.pop().discard();
             if (this$1._scene.length === 0) {
                 this$1._nPop = 0;
                 break;
@@ -3171,6 +3899,19 @@ var SceneMgr = (function (GObject$$1) {
             OutputError("scenemgr::ondraw()", e.message);
         }
         this._state = SceneMgrState.Idle;
+    };
+    // -------------- from GObject --------------
+    SceneMgr.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GObject$$1.prototype.discard.call(this, function () {
+            if (this$1._nextScene)
+                { this$1._nextScene.discard(); }
+            var s = this$1._scene;
+            for (var i = 0; i < s.length; i++)
+                { s[i].discard(); }
+            this$1._scene = [];
+        });
     };
 
     return SceneMgr;
@@ -3234,19 +3975,19 @@ Loop.prototype.stop = function stop () {
     this._reset();
 };
 
-var GLResourceSet = (function (GLResourceFlag$$1) {
+var GLResourceSet = (function (GLResourceBase$$1) {
     function GLResourceSet() {
-        GLResourceFlag$$1.apply(this, arguments);
+        GLResourceBase$$1.apply(this, arguments);
         this._set = new Set();
     }
 
-    if ( GLResourceFlag$$1 ) GLResourceSet.__proto__ = GLResourceFlag$$1;
-    GLResourceSet.prototype = Object.create( GLResourceFlag$$1 && GLResourceFlag$$1.prototype );
+    if ( GLResourceBase$$1 ) GLResourceSet.__proto__ = GLResourceBase$$1;
+    GLResourceSet.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
     GLResourceSet.prototype.constructor = GLResourceSet;
     GLResourceSet.prototype.onContextLost = function onContextLost () {
         var this$1 = this;
 
-        GLResourceFlag$$1.prototype.onContextLost.call(this, function () {
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
             this$1._set.forEach(function (r) {
                 r.onContextLost();
             });
@@ -3255,7 +3996,7 @@ var GLResourceSet = (function (GLResourceFlag$$1) {
     GLResourceSet.prototype.onContextRestored = function onContextRestored () {
         var this$1 = this;
 
-        GLResourceFlag$$1.prototype.onContextRestored.call(this, function () {
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
             this$1._set.forEach(function (r) {
                 r.onContextRestored();
             });
@@ -3271,7 +4012,7 @@ var GLResourceSet = (function (GLResourceFlag$$1) {
     };
 
     return GLResourceSet;
-}(GLResourceFlag));
+}(GLResourceBase));
 
 var Alias = { "common": "fragile/resource/common.glsl", "gauss": "fragile/resource/gauss.def", "gaussH_FS": "fragile/resource/gaussH_FS.fsh", "gaussV_FS": "fragile/resource/gaussV_FS.fsh", "gauss_mix9": "fragile/resource/gauss_mix9.glsl", "gaussh": "fragile/resource/gaussh.vsh", "gaussv": "fragile/resource/gaussv.vsh", "gaussvalue": "fragile/resource/gaussvalue.glsl", "prog": "fragile/resource/prog.prog", "rectf": "fragile/resource/rectf.fsh", "rectv": "fragile/resource/rectv.vsh", "rectvalue": "fragile/resource/rectvalue.glsl", "testf": "fragile/resource/testf.fsh", "testv": "fragile/resource/testv.vsh", "textf": "fragile/resource/textf.fsh", "textv": "fragile/resource/textv.vsh", "textvalue": "fragile/resource/textvalue.glsl", "uv9": "fragile/resource/uv9.glsl" };
 
@@ -3454,138 +4195,146 @@ var GLBufferInfo = function GLBufferInfo(usage, typeinfo,
     this.dim = dim;
     this.backup = backup;
 };
-var GLBuffer = function GLBuffer() {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._bBind = false;
-    glres.add(this);
-};
-GLBuffer.prototype.id = function id () {
-    return this._id;
-};
-GLBuffer.prototype.usage = function usage () {
-    return this._info.usage;
-};
-GLBuffer.prototype.typeinfo = function typeinfo () {
-    return this._info.typeinfo;
-};
-GLBuffer.prototype.nElem = function nElem () {
-    return this._info.nElem;
-};
-GLBuffer.prototype.dim = function dim () {
-    return this._info.dim;
-};
-GLBuffer.prototype._typeId = function _typeId () {
-    return GLConst.BufferTypeC.convert(this.typeId());
-};
-GLBuffer.prototype._typeQueryId = function _typeQueryId () {
-    return GLConst.BufferQueryC.convert(this.typeQueryId());
-};
-GLBuffer.prototype._usage = function _usage () {
-    return GLConst.DrawTypeC.convert(this.usage());
-};
-GLBuffer.prototype.allocate = function allocate (fmt, nElem, dim, usage, bRestore) {
-        var this$1 = this;
-
-    var t = GLConst.GLTypeInfo[GLConst.DataFormatC.convert(fmt)];
-    Assert(Boolean(t));
-    var bytelen = nElem * dim * t.bytesize;
-    this._info = new GLBufferInfo(usage, t, nElem, dim, bRestore ? new ArrayBuffer(bytelen) : undefined);
-    this.proc(function () {
-        gl.bufferData(this$1._typeId(), bytelen, this$1._usage());
-    });
-};
-GLBuffer.prototype._setData = function _setData (data, info, nElem, dim, usage, bRestore) {
-        var this$1 = this;
-
-    var restoreData;
-    if (bRestore) {
-        restoreData = data.slice(0);
+var GLBuffer = (function (GLResourceBase$$1) {
+    function GLBuffer() {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bBind = false;
+        glres.add(this);
     }
-    this._info = new GLBufferInfo(usage, info, nElem, dim, restoreData);
-    this.proc(function () {
-        gl.bufferData(this$1._typeId(), data, this$1._usage());
-    });
-};
-GLBuffer.prototype.setData = function setData (data, dim, usage, bRestore) {
-    var t = GLConst.Type2GLType[data.constructor.name];
-    this._setData(data.buffer, t, data.length / dim, dim, usage, bRestore);
-};
-GLBuffer.prototype.setVectorData = function setVectorData (data, usage, bRestore) {
-    this.setData(VectorToArray.apply(void 0, data), data[0].dim(), usage, bRestore);
-};
-GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
+
+    if ( GLResourceBase$$1 ) GLBuffer.__proto__ = GLResourceBase$$1;
+    GLBuffer.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLBuffer.prototype.constructor = GLBuffer;
+    GLBuffer.prototype.id = function id () {
+        return this._id;
+    };
+    GLBuffer.prototype.usage = function usage () {
+        return this._info.usage;
+    };
+    GLBuffer.prototype.typeinfo = function typeinfo () {
+        return this._info.typeinfo;
+    };
+    GLBuffer.prototype.nElem = function nElem () {
+        return this._info.nElem;
+    };
+    GLBuffer.prototype.dim = function dim () {
+        return this._info.dim;
+    };
+    GLBuffer.prototype._typeId = function _typeId () {
+        return GLConst.BufferTypeC.convert(this.typeId());
+    };
+    GLBuffer.prototype._typeQueryId = function _typeQueryId () {
+        return GLConst.BufferQueryC.convert(this.typeQueryId());
+    };
+    GLBuffer.prototype._usage = function _usage () {
+        return GLConst.DrawTypeC.convert(this.usage());
+    };
+    GLBuffer.prototype.allocate = function allocate (fmt, nElem, dim, usage, bRestore) {
         var this$1 = this;
 
-    var info = this._info;
-    var ofs = info.typeinfo.bytesize * offset_elem;
-    if (info.backup) {
-        var dst = new Uint8Array(info.backup);
-        var src = new Uint8Array(data);
-        for (var i = 0; i < data.byteLength; i++)
-            { dst[ofs + i] = src[i]; }
-    }
-    this.proc(function () {
-        gl.bufferSubData(this$1._typeId(), ofs, data);
-    });
-};
-// --------- from Bindable ---------
-GLBuffer.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(!this._bBind, "already binded");
-    gl.bindBuffer(this._typeId(), this.id());
-    this._bBind = true;
-};
-GLBuffer.prototype.unbind = function unbind (id) {
+        var t = GLConst.GLTypeInfo[GLConst.DataFormatC.convert(fmt)];
+        Assert(Boolean(t));
+        var bytelen = nElem * dim * t.bytesize;
+        this._info = new GLBufferInfo(usage, t, nElem, dim, bRestore ? new ArrayBuffer(bytelen) : undefined);
+        this.proc(function () {
+            gl.bufferData(this$1._typeId(), bytelen, this$1._usage());
+        });
+    };
+    GLBuffer.prototype._setData = function _setData (data, info, nElem, dim, usage, bRestore) {
+        var this$1 = this;
+
+        var restoreData;
+        if (bRestore) {
+            restoreData = data.slice(0);
+        }
+        this._info = new GLBufferInfo(usage, info, nElem, dim, restoreData);
+        this.proc(function () {
+            gl.bufferData(this$1._typeId(), data, this$1._usage());
+        });
+    };
+    GLBuffer.prototype.setData = function setData (data, dim, usage, bRestore) {
+        var t = GLConst.Type2GLType[data.constructor.name];
+        this._setData(data.buffer, t, data.length / dim, dim, usage, bRestore);
+    };
+    GLBuffer.prototype.setVectorData = function setVectorData (data, usage, bRestore) {
+        this.setData(VectorToArray.apply(void 0, data), data[0].dim(), usage, bRestore);
+    };
+    GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
+        var this$1 = this;
+
+        var info = this._info;
+        var ofs = info.typeinfo.bytesize * offset_elem;
+        if (info.backup) {
+            var dst = new Uint8Array(info.backup);
+            var src = new Uint8Array(data);
+            for (var i = 0; i < data.byteLength; i++)
+                { dst[ofs + i] = src[i]; }
+        }
+        this.proc(function () {
+            gl.bufferSubData(this$1._typeId(), ofs, data);
+        });
+    };
+    // --------- from Bindable ---------
+    GLBuffer.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(!this._bBind, "already binded");
+        gl.bindBuffer(this._typeId(), this.id());
+        this._bBind = true;
+    };
+    GLBuffer.prototype.unbind = function unbind (id) {
         if ( id === void 0 ) id = null;
 
-    Assert(this._bBind, "not binded yet");
-    gl.bindBuffer(this._typeId(), id);
-    this._bBind = false;
-};
-GLBuffer.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(this._typeQueryId());
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// --------- from Discardable ---------
-GLBuffer.prototype.discard = function discard () {
-    Assert(!this._bBind, "still binding somewhere");
-    this.onContextLost();
-    this._rf.discard();
-};
-GLBuffer.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-// --------- from GLContext ---------
-GLBuffer.prototype.onContextLost = function onContextLost () {
+        Assert(this._bBind, "not binded yet");
+        gl.bindBuffer(this._typeId(), id);
+        this._bBind = false;
+    };
+    GLBuffer.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(this._typeQueryId());
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // --------- from GLResourceBase ---------
+    GLBuffer.prototype.discard = function discard (cb) {
         var this$1 = this;
 
-    this._rf.onContextLost(function () {
-        gl.deleteBuffer(this$1.id());
-        this$1._id = null;
-    });
-};
-GLBuffer.prototype.onContextRestored = function onContextRestored () {
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bBind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+    // --------- from GLContext ---------
+    GLBuffer.prototype.onContextLost = function onContextLost () {
         var this$1 = this;
 
-    this._rf.onContextRestored(function () {
-        this$1._id = gl.createBuffer();
-        if (this$1._info) {
-            // 必要ならデータを復元
-            var bd = this$1._info.backup;
-            if (bd) {
-                this$1._setData(bd, this$1.typeinfo(), this$1.nElem(), this$1.dim(), this$1.usage(), true);
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteBuffer(this$1.id());
+            this$1._id = null;
+        });
+    };
+    GLBuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._id = gl.createBuffer();
+            if (this$1._info) {
+                // 必要ならデータを復元
+                var bd = this$1._info.backup;
+                if (bd) {
+                    this$1._setData(bd, this$1.typeinfo(), this$1.nElem(), this$1.dim(), this$1.usage(), true);
+                }
             }
-        }
-    });
-};
-GLBuffer.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
+        });
+    };
+
+    return GLBuffer;
+}(GLResourceBase));
 
 var GLVBuffer = (function (GLBuffer$$1) {
     function GLVBuffer () {
@@ -3694,6 +4443,61 @@ var PSpriteDraw = (function (DObject$$1) {
     return PSpriteDraw;
 }(DObject));
 
+var Range = function Range(from, to) {
+    this.from = from;
+    this.to = to;
+};
+Range.prototype.width = function width () {
+    return this.to - this.from;
+};
+Range.prototype.move = function move (ofs) {
+    this.from += ofs;
+    this.to += ofs;
+};
+
+var LinearTimer = function LinearTimer(init, end) {
+    this.cur = 0;
+    this.range = new Range(0, 0);
+    this.range.from = init;
+    this.range.to = end;
+};
+LinearTimer.prototype.reset = function reset () {
+    this.cur = this.range.from;
+};
+LinearTimer.prototype.get = function get () {
+    return this.cur;
+};
+LinearTimer.prototype.advance = function advance (dt) {
+    if (this.cur >= this.range.to) {
+        return true;
+    }
+    this.cur += dt;
+    return false;
+};
+
+var TextDraw = (function (DObject$$1) {
+    function TextDraw(text, delay) {
+        DObject$$1.call(this, "text");
+        this._text = text;
+        this.timer = new LinearTimer(0, text.length() + delay);
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+        this.delay = delay;
+    }
+
+    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
+    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextDraw.prototype.constructor = TextDraw;
+    TextDraw.prototype.advance = function advance (dt) {
+        return this.timer.advance(dt);
+    };
+    TextDraw.prototype.onDraw = function onDraw () {
+        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
+    };
+
+    return TextDraw;
+}(DObject));
+
 var Font = (function () {
     function anonymous(family, size, weight, italic) {
         this.family = family;
@@ -3752,18 +4556,6 @@ var RP_FontCtx = (function (RPWebGLCtx$$1) {
     return anonymous;
 }(RPWebGLCtx));
 
-var Range = function Range(from, to) {
-    this.from = from;
-    this.to = to;
-};
-Range.prototype.width = function width () {
-    return this.to - this.from;
-};
-Range.prototype.move = function move (ofs) {
-    this.from += ofs;
-    this.to += ofs;
-};
-
 ResourceGenSrc.FontHeight = function (rp) {
     var c = ResourceGen.get(new RP_FontCtx("fontcanvas"));
     c.data.font = rp.font.fontstr();
@@ -3811,25 +4603,6 @@ prototypeAccessors$3.key.get = function () {
 };
 
 Object.defineProperties( RPFontHeight.prototype, prototypeAccessors$3 );
-
-var GLTexture2D = (function (GLTexture$$1) {
-    function GLTexture2D () {
-        GLTexture$$1.apply(this, arguments);
-    }
-
-    if ( GLTexture$$1 ) GLTexture2D.__proto__ = GLTexture$$1;
-    GLTexture2D.prototype = Object.create( GLTexture$$1 && GLTexture$$1.prototype );
-    GLTexture2D.prototype.constructor = GLTexture2D;
-
-    GLTexture2D.prototype.typeId = function typeId () {
-        return TextureType.Texture2D;
-    };
-    GLTexture2D.prototype.typeQueryId = function typeQueryId () {
-        return TextureQuery.Texture2D;
-    };
-
-    return GLTexture2D;
-}(GLTexture));
 
 // フォントテクスチャのうちの一行分
 var FontLane = function FontLane(w) {
@@ -4139,12 +4912,13 @@ function CharPlace(fp, lineH, size, from, to) {
                     break Place;
                 }
             }
+            var tex = f.texture;
             var ps = (void 0);
-            if (vi.has(f.texture))
-                { ps = vi.get(f.texture); }
+            if (vi.has(tex))
+                { ps = vi.get(tex); }
             else {
-                ps = new PlaneSingle(f.texture);
-                vi.set(f.texture, ps);
+                ps = new PlaneSingle(tex);
+                vi.set(tex, ps);
             }
             ps.add(cur, f, time++);
             cur.x += f.width;
@@ -4390,591 +5164,6 @@ Text.prototype.draw = function draw (offset, time, timeDelay, alpha) {
 
 Text.Tag = Tag;
 
-var XHRLoader = function XHRLoader(url, type) {
-    var this$1 = this;
-
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", url);
-    xhr.responseType = type;
-    xhr.onprogress = function (e) {
-        if (e.lengthComputable) {
-            this$1._cb.progress(e.loaded, e.total);
-            this$1._loaded = e.loaded;
-            this$1._total = e.total;
-        }
-    };
-    xhr.onload = function () {
-        var xhr = this$1._xhr;
-        if (xhr.readyState === 4) {
-            if (xhr.status === 200) {
-                this$1._status = "complete";
-                this$1._cb.progress((this$1._loaded >= 0) ? this$1._total : 0, this$1._total);
-                this$1._cb.completed();
-            }
-            else {
-                this$1._status = "error";
-                this$1._errormsg = xhr.statusText;
-                this$1._cb.error();
-            }
-        }
-    };
-    xhr.ontimeout = function (e) {
-        this$1._errormsg = "timeout";
-        this$1._cb.error();
-    };
-    xhr.onerror = function () {
-        this$1._errormsg = "unknown error";
-        this$1._cb.error();
-    };
-    this._status = "idle";
-    this._xhr = xhr;
-};
-XHRLoader.prototype.begin = function begin (callback, timeout) {
-    this._cb = callback;
-    this._status = "loading";
-    this._xhr.timeout = timeout;
-    this._loaded = 0;
-    this._total = 0;
-    callback.progress(this._loaded, this._total);
-    this._xhr.send(null);
-};
-XHRLoader.prototype.abort = function abort () {
-    this._status = "abort";
-    this._xhr.abort();
-};
-XHRLoader.prototype.errormsg = function errormsg () {
-    return this._errormsg;
-};
-XHRLoader.prototype.status = function status () {
-    return this._status;
-};
-XHRLoader.prototype.result = function result () {
-    return this._xhr.response;
-};
-
-ResourceExtToType.def = "JSON";
-ResourceInfo.JSON = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "json");
-    },
-    makeResource: function (src) {
-        return new ResourceWrap(src);
-    }
-};
-
-var ShaderError = (function (Error) {
-    function ShaderError(id) {
-        Error.call(this, "\n"
-            + PaddingString(32, "-")
-            + AddLineNumber(gl.getShaderSource(id), 1, 0, true, false)
-            + PaddingString(32, "-")
-            + "\n"
-            + gl.getShaderInfoLog(id)
-            + "\n");
-    }
-
-    if ( Error ) ShaderError.__proto__ = Error;
-    ShaderError.prototype = Object.create( Error && Error.prototype );
-    ShaderError.prototype.constructor = ShaderError;
-
-    var prototypeAccessors = { name: {} };
-    prototypeAccessors.name.get = function () {
-        return "ShaderError";
-    };
-
-    Object.defineProperties( ShaderError.prototype, prototypeAccessors );
-
-    return ShaderError;
-}(Error));
-var GLShader = function GLShader(src) {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._source = src;
-    glres.add(this);
-};
-GLShader.prototype.id = function id () {
-    return this._id;
-};
-// --------------- from GLContext ---------------
-GLShader.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-    this._rf.onContextLost(function () {
-        gl.deleteShader(this$1._id);
-        this$1._id = null;
-    });
-};
-GLShader.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        // シェーダーを読み込んでコンパイル
-        var id = gl.createShader(GLConst.ShaderTypeC.convert(this$1.typeId()));
-        gl.shaderSource(id, this$1._source);
-        gl.compileShader(id);
-        if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) {
-            this$1._id = id;
-        }
-        else {
-            throw new ShaderError(id);
-        }
-    });
-};
-GLShader.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
-// --------------- from Discardable ---------------
-GLShader.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-GLShader.prototype.discard = function discard () {
-    this.onContextLost();
-    this._rf.discard();
-};
-
-var GLVShader = (function (GLShader$$1) {
-    function GLVShader () {
-        GLShader$$1.apply(this, arguments);
-    }
-
-    if ( GLShader$$1 ) GLVShader.__proto__ = GLShader$$1;
-    GLVShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-    GLVShader.prototype.constructor = GLVShader;
-
-    GLVShader.prototype.typeId = function typeId () {
-        return ShaderType.Vertex;
-    };
-
-    return GLVShader;
-}(GLShader));
-
-var GLFShader = (function (GLShader$$1) {
-    function GLFShader () {
-        GLShader$$1.apply(this, arguments);
-    }
-
-    if ( GLShader$$1 ) GLFShader.__proto__ = GLShader$$1;
-    GLFShader.prototype = Object.create( GLShader$$1 && GLShader$$1.prototype );
-    GLFShader.prototype.constructor = GLFShader;
-
-    GLFShader.prototype.typeId = function typeId () {
-        return ShaderType.Fragment;
-    };
-
-    return GLFShader;
-}(GLShader));
-
-ResourceExtToType.vsh = "VertexShader";
-ResourceExtToType.fsh = "FragmentShader";
-ResourceInfo.VertexShader = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "text");
-    },
-    makeResource: function (src) {
-        return new GLVShader(src);
-    }
-};
-ResourceInfo.FragmentShader = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "text");
-    },
-    makeResource: function (src) {
-        return new GLFShader(src);
-    }
-};
-
-var ProgramError = (function (Error) {
-    function ProgramError(id) {
-        Error.call(this, gl.getProgramInfoLog(id));
-    }
-
-    if ( Error ) ProgramError.__proto__ = Error;
-    ProgramError.prototype = Object.create( Error && Error.prototype );
-    ProgramError.prototype.constructor = ProgramError;
-
-    var prototypeAccessors = { name: {} };
-    prototypeAccessors.name.get = function () {
-        return "ProgramError";
-    };
-
-    Object.defineProperties( ProgramError.prototype, prototypeAccessors );
-
-    return ProgramError;
-}(Error));
-var GLProgram = function GLProgram(vs, fs) {
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._bBind = false;
-    this._vs = vs;
-    this._fs = fs;
-    glres.add(this);
-};
-GLProgram.prototype.id = function id () {
-    return this._id;
-};
-GLProgram.prototype.hasUniform = function hasUniform (name) {
-    return this._uniform[name] !== undefined;
-};
-/*!
-    \param[in] value	[matrix...] or [vector...] or matrix or vector or float or int
-*/
-GLProgram.prototype.setUniform = function setUniform (name, value) {
-    var u = this._uniform[name];
-    if (u) {
-        Assert(!(value instanceof Array));
-        var f = u.type.uniformF;
-        var fa = u.type.uniformAF;
-        // matrix or vector or float or int
-        if (IsMatrix(value))
-            { fa.call(gl, u.index, false, value.value); }
-        else if (IsVector(value))
-            { fa.call(gl, u.index, value.value); }
-        else
-            { f.call(gl, u.index, value); }
-        return;
-    }
-    u = this._uniform[name + "[0]"];
-    if (u) {
-        Assert(value instanceof Array);
-        var fa$1 = u.type.uniformAF;
-        if (IsVM(value[0])) {
-            // [matrix...] or [vector...]
-            var ar = value;
-            fa$1.call(gl, u.index, VMToArray(ar));
-        }
-        else {
-            fa$1.call(gl, u.index, value);
-        }
-    }
-};
-/*!
-    \param[in] data	[vector...] or GLVBuffer
-*/
-GLProgram.prototype.setVStream = function setVStream (name, data) {
-    var a = this._attribute[name];
-    if (a) {
-        if (data instanceof Array) {
-            // [vector...]
-            a.type.vertexF(a.index, VectorToArray.apply(void 0, data));
-        }
-        else {
-            var data2 = data;
-            // GLVBuffer
-            data2.proc(function () {
-                gl.enableVertexAttribArray(a.index);
-                var info = data2.typeinfo();
-                gl.vertexAttribPointer(a.index, data2.dim(), info.id, false, info.bytesize * data2.dim(), 0);
-            });
-        }
-        return a.index;
-    }
-};
-// ------------- from Bindable -------------
-GLProgram.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(!this._bBind, "already binded");
-    gl.useProgram(this.id());
-    this._bBind = true;
-};
-GLProgram.prototype.unbind = function unbind (id) {
-        if ( id === void 0 ) id = null;
-
-    Assert(this._bBind, "not binding anywhere");
-    gl.useProgram(id);
-    this._bBind = false;
-};
-GLProgram.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(gl.CURRENT_PROGRAM);
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// ------------- from Discardable -------------
-GLProgram.prototype.discard = function discard () {
-    Assert(!this._bBind);
-    this.onContextLost();
-    this._rf.discard();
-};
-GLProgram.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-// ------------- from GLContext -------------
-GLProgram.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-    this._rf.onContextLost(function () {
-        gl.deleteProgram(this$1.id());
-        this$1._id = null;
-    });
-};
-GLProgram.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        if (this$1._vs.contextLost())
-            { this$1._vs.onContextRestored(); }
-        if (this$1._fs.contextLost())
-            { this$1._fs.onContextRestored(); }
-        var prog = gl.createProgram();
-        gl.attachShader(prog, this$1._vs.id());
-        gl.attachShader(prog, this$1._fs.id());
-        gl.linkProgram(prog);
-        if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-            this$1._id = prog;
-        }
-        else
-            { throw new ProgramError(prog); }
-        {
-            var attr = {};
-            var nAtt = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
-            for (var i = 0; i < nAtt; i++) {
-                var a = gl.getActiveAttrib(prog, i);
-                var typ = GLConst.GLSLTypeInfo[a.type];
-                attr[a.name] = {
-                    index: gl.getAttribLocation(prog, a.name),
-                    size: a.size,
-                    type: typ
-                };
-                Assert(attr[a.name].type !== undefined);
-            }
-            this$1._attribute = attr;
-        }
-        {
-            var unif = {};
-            var nUnif = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
-            for (var i$1 = 0; i$1 < nUnif; i$1++) {
-                var u = gl.getActiveUniform(prog, i$1);
-                unif[u.name] = {
-                    index: gl.getUniformLocation(prog, u.name),
-                    size: u.size,
-                    type: GLConst.GLSLTypeInfo[u.type]
-                };
-                Assert(unif[u.name].type !== undefined);
-            }
-            this$1._uniform = unif;
-        }
-    });
-};
-GLProgram.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
-
-function ToLowercaseKeys(ar) {
-    var ret = {};
-    Object.keys(ar).forEach(function (k) {
-        var val = ar[k];
-        if (typeof val === "string")
-            { val = val.toLowerCase(); }
-        else if (val instanceof Array) {
-            for (var i = 0; i < val.length; i++) {
-                if (typeof val[i] === "string")
-                    { val[i] = val[i].toLowerCase(); }
-            }
-        }
-        ret[k.toLowerCase()] = val;
-    });
-    return ret;
-}
-var GLValueSet = function GLValueSet () {};
-
-GLValueSet.FromJSON = function FromJSON (js) {
-    var ret = new GLValueSet();
-    var bs = js.boolset;
-    var bsf = {};
-    for (var i = 0; i < bs.length; i++) {
-        bsf[bs[i]] = true;
-    }
-    ret._boolset = ToLowercaseKeys(bsf);
-    ret._valueset = ToLowercaseKeys(js.valueset);
-    return ret;
-};
-GLValueSet.prototype.enable = function enable (name) {
-    this._boolset[name] = true;
-};
-GLValueSet.prototype.disable = function disable (name) {
-    delete this._boolset[name];
-};
-GLValueSet.prototype.apply = function apply () {
-        var this$1 = this;
-
-    // boolset
-    for (var i = 0; i < BoolString.length; i++) {
-        var key = BoolString[i];
-        var func = (this$1._boolset[key] === true) ? gl.enable : gl.disable;
-        func.call(gl, GLConst.BoolSettingC.convert(i + 34359738368 /* Num */));
-    }
-    // valueset
-    for (var k in this$1._valueset) {
-        var args = this$1._valueset[k];
-        var func$1 = GLConst.ValueSetting[k];
-        if (args instanceof Array)
-            { func$1.call(gl, args[0], args[1], args[2], args[3]); }
-        else
-            { func$1.call(gl, args); }
-    }
-};
-
-/// <reference path="arrayfunc.ts" />
-var Technique = (function (ResourceWrap$$1) {
-    function Technique(src) {
-        ResourceWrap$$1.call(this, null);
-        // 必要なリソースが揃っているかのチェック
-        var later = this._checkResource(src);
-        if (!later.empty())
-            { throw new (Function.prototype.bind.apply( MoreResource, [ null ].concat( later) )); }
-        // 実際のローディング
-        this._loadResource(src);
-    }
-
-    if ( ResourceWrap$$1 ) Technique.__proto__ = ResourceWrap$$1;
-    Technique.prototype = Object.create( ResourceWrap$$1 && ResourceWrap$$1.prototype );
-    Technique.prototype.constructor = Technique;
-    Technique.prototype._checkResource = function _checkResource (src) {
-        var later = [];
-        Object.keys(src.technique).forEach(function (k) {
-            var v = src.technique[k];
-            var chk = function (key) {
-                if (!resource.checkResource(key))
-                    { later.push(key); }
-            };
-            if (v.valueset instanceof Object) {
-                Assert(v.boolset instanceof Object);
-            }
-            else
-                { chk(v.valueset); }
-            chk(v.vshader);
-            chk(v.fshader);
-        });
-        return later;
-    };
-    Technique.prototype._loadResource = function _loadResource (src) {
-        var tech = {};
-        Object.keys(src.technique).forEach(function (k) {
-            var v = src.technique[k];
-            var vs;
-            if (v.valueset instanceof Object) {
-                vs = GLValueSet.FromJSON({
-                    boolset: v.boolset,
-                    valueset: v.valueset
-                });
-            }
-            else {
-                vs = GLValueSet.FromJSON(resource.getResource(v.valueset).data);
-            }
-            tech[k] = {
-                valueset: vs,
-                program: new GLProgram(resource.getResource(v.vshader), resource.getResource(v.fshader))
-            };
-        });
-        this._tech = tech;
-    };
-
-    Technique.prototype.technique = function technique () {
-        return this._tech;
-    };
-
-    return Technique;
-}(ResourceWrap));
-
-ResourceExtToType.prog = "Technique";
-ResourceInfo.Technique = {
-    makeLoader: function (url) {
-        return new XHRLoader(url, "json");
-    },
-    makeResource: function (src) {
-        return new Technique(src);
-    }
-};
-
-var ImageLoader = (function (XHRLoader$$1) {
-    function ImageLoader(url) {
-        XHRLoader$$1.call(this, url, "blob");
-    }
-
-    if ( XHRLoader$$1 ) ImageLoader.__proto__ = XHRLoader$$1;
-    ImageLoader.prototype = Object.create( XHRLoader$$1 && XHRLoader$$1.prototype );
-    ImageLoader.prototype.constructor = ImageLoader;
-    ImageLoader.prototype.begin = function begin (callback, timeout) {
-        var this$1 = this;
-
-        XHRLoader$$1.prototype.begin.call(this, {
-            completed: function () {
-                var img = new Image();
-                this$1._img = img;
-                img.src = window.URL.createObjectURL(XHRLoader$$1.prototype.result.call(this$1));
-                img.onload = function () {
-                    callback.completed();
-                };
-            },
-            error: callback.error,
-            progress: callback.progress
-        }, timeout);
-    };
-    ImageLoader.prototype.result = function result () {
-        return this._img;
-    };
-
-    return ImageLoader;
-}(XHRLoader));
-
-ResourceExtToType.png = "Image";
-ResourceExtToType.jpg = "Image";
-ResourceInfo.Image = {
-    makeLoader: function (url) {
-        return new ImageLoader(url);
-    },
-    makeResource: function (src) {
-        var tex = new GLTexture2D();
-        tex.setImage(InterFormat.RGBA, InterFormat.RGBA, TexDataFormat.UB, src);
-        return tex;
-    }
-};
-
-var LinearTimer = function LinearTimer(init, end) {
-    this.cur = 0;
-    this.range = new Range(0, 0);
-    this.range.from = init;
-    this.range.to = end;
-};
-LinearTimer.prototype.reset = function reset () {
-    this.cur = this.range.from;
-};
-LinearTimer.prototype.get = function get () {
-    return this.cur;
-};
-LinearTimer.prototype.advance = function advance (dt) {
-    if (this.cur >= this.range.to) {
-        return true;
-    }
-    this.cur += dt;
-    return false;
-};
-
-var TextDraw = (function (DObject$$1) {
-    function TextDraw(text, delay) {
-        DObject$$1.call(this, "text");
-        this._text = text;
-        this.timer = new LinearTimer(0, text.length() + delay);
-        this.offset = new Vec2(0, 0);
-        this.alpha = 1;
-        this.delay = delay;
-    }
-
-    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
-    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    TextDraw.prototype.constructor = TextDraw;
-    TextDraw.prototype.advance = function advance (dt) {
-        return this.timer.advance(dt);
-    };
-    TextDraw.prototype.onDraw = function onDraw () {
-        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
-    };
-
-    return TextDraw;
-}(DObject));
-
 var TextLines = (function (Text$$1) {
     function TextLines(lineDelay) {
         var this$1 = this;
@@ -5062,80 +5251,88 @@ var GLTexture2DP = (function (GLTexture2D$$1) {
     return GLTexture2DP;
 }(GLTexture2D));
 
-var GLRenderbuffer = function GLRenderbuffer() {
-    this._rf = new GLResourceFlag();
-    this._bBind = false;
-    this._size = new Size(0, 0);
-    glres.add(this);
-};
-GLRenderbuffer.prototype.size = function size () {
-    return this._size;
-};
-GLRenderbuffer.prototype.format = function format () {
-    return this._format;
-};
-GLRenderbuffer.prototype.id = function id () {
-    return this._id;
-};
-GLRenderbuffer.prototype.allocate = function allocate (fmt, w, h) {
-    var assign;
+var GLRenderbuffer = (function (GLResourceBase$$1) {
+    function GLRenderbuffer() {
+        GLResourceBase$$1.call(this);
+        this._bBind = false;
+        this._size = new Size(0, 0);
+        glres.add(this);
+    }
+
+    if ( GLResourceBase$$1 ) GLRenderbuffer.__proto__ = GLResourceBase$$1;
+    GLRenderbuffer.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLRenderbuffer.prototype.constructor = GLRenderbuffer;
+    GLRenderbuffer.prototype.size = function size () {
+        return this._size;
+    };
+    GLRenderbuffer.prototype.format = function format () {
+        return this._format;
+    };
+    GLRenderbuffer.prototype.id = function id () {
+        return this._id;
+    };
+    GLRenderbuffer.prototype.allocate = function allocate (fmt, w, h) {
+        var assign;
         (assign = [fmt, w, h], this._format = assign[0], this._size.width = assign[1], this._size.height = assign[2]);
-    this.proc(function () {
-        gl.renderbufferStorage(gl.RENDERBUFFER, GLConst.RBFormatC.convert(fmt), w, h);
-    });
-};
-// ------------- from Discardable -------------
-GLRenderbuffer.prototype.discard = function discard () {
-    Assert(!this._bBind, "still binding somewhere");
-    this.onContextLost();
-    this._rf.discard();
-};
-GLRenderbuffer.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-// ------------- from Bindable -------------
-GLRenderbuffer.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(!this._bBind, "already binded");
-    gl.bindRenderbuffer(gl.RENDERBUFFER, this.id());
-    this._bBind = true;
-};
-GLRenderbuffer.prototype.unbind = function unbind (id) {
+        this.proc(function () {
+            gl.renderbufferStorage(gl.RENDERBUFFER, GLConst.RBFormatC.convert(fmt), w, h);
+        });
+    };
+    // ------------- from GLResourceBase -------------
+    GLRenderbuffer.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bBind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+    // ------------- from Bindable -------------
+    GLRenderbuffer.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(!this._bBind, "already binded");
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.id());
+        this._bBind = true;
+    };
+    GLRenderbuffer.prototype.unbind = function unbind (id) {
         if ( id === void 0 ) id = null;
 
-    Assert(this._bBind, "not binded yet");
-    gl.bindRenderbuffer(gl.RENDERBUFFER, id);
-    this._bBind = false;
-};
-GLRenderbuffer.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(gl.RENDERBUFFER_BINDING);
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// ------------- from GLContext -------------
-GLRenderbuffer.prototype.onContextLost = function onContextLost () {
+        Assert(this._bBind, "not binded yet");
+        gl.bindRenderbuffer(gl.RENDERBUFFER, id);
+        this._bBind = false;
+    };
+    GLRenderbuffer.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(gl.RENDERBUFFER_BINDING);
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // ------------- from GLContext -------------
+    GLRenderbuffer.prototype.onContextLost = function onContextLost () {
         var this$1 = this;
 
-    this._rf.onContextLost(function () {
-        gl.deleteRenderbuffer(this$1.id());
-        this$1._id = null;
-    });
-};
-GLRenderbuffer.prototype.onContextRestored = function onContextRestored () {
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteRenderbuffer(this$1.id());
+            this$1._id = null;
+        });
+    };
+    GLRenderbuffer.prototype.onContextRestored = function onContextRestored () {
         var this$1 = this;
 
-    this._rf.onContextRestored(function () {
-        this$1._id = gl.createRenderbuffer();
-        if (this$1._format)
-            { this$1.allocate(this$1._format, this$1._size.width, this$1._size.height); }
-    });
-};
-GLRenderbuffer.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._id = gl.createRenderbuffer();
+            if (this$1._format)
+                { this$1.allocate(this$1._format, this$1._size.width, this$1._size.height); }
+        });
+    };
+
+    return GLRenderbuffer;
+}(GLResourceBase));
 
 // 割合による矩形指定
 var VPRatio = function VPRatio(rect) {
@@ -5151,152 +5348,160 @@ var VPPixel = function VPPixel(rect) {
 VPPixel.prototype.getPixelRect = function getPixelRect (s) {
     return this.rect;
 };
-var GLFramebuffer = function GLFramebuffer() {
-    var this$1 = this;
+var GLFramebuffer = (function (GLResourceBase$$1) {
+    function GLFramebuffer() {
+        var this$1 = this;
 
-    this._rf = new GLResourceFlag();
-    this._id = null;
-    this._bBind = false;
-    this._attachment = [];
-    glres.add(this);
-    for (var i = 0; i < GLConst.AttachmentC.length(); i++)
-        { this$1._attachment[i] = null; }
-    this.setVPByRatio(new Rect(0, 1, 1, 0));
-};
-GLFramebuffer.prototype._applyAttachment = function _applyAttachment (pos) {
-    var buff = this._attachment[pos];
-    var pos_gl = GLConst.AttachmentC.convert(pos);
-    if (buff instanceof GLRenderbuffer) {
-        buff.onContextRestored();
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, pos_gl, gl.RENDERBUFFER, buff.id());
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bBind = false;
+        this._attachment = [];
+        glres.add(this);
+        for (var i = 0; i < GLConst.AttachmentC.length(); i++)
+            { this$1._attachment[i] = null; }
+        this.setVPByRatio(new Rect(0, 1, 1, 0));
     }
-    else if (buff instanceof GLTexture2D) {
-        buff.onContextRestored();
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, pos_gl, gl.TEXTURE_2D, buff.id(), 0);
-    }
-};
-GLFramebuffer.prototype.setVPByPixel = function setVPByPixel (r) {
-    this._vpset = new VPPixel(r);
-};
-GLFramebuffer.prototype.setVPByRatio = function setVPByRatio (r) {
-    this._vpset = new VPRatio(r);
-};
-GLFramebuffer.prototype.id = function id () {
-    return this._id;
-};
-GLFramebuffer.prototype.status = function status () {
-    var statusStr = {};
+
+    if ( GLResourceBase$$1 ) GLFramebuffer.__proto__ = GLResourceBase$$1;
+    GLFramebuffer.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLFramebuffer.prototype.constructor = GLFramebuffer;
+    GLFramebuffer.prototype._applyAttachment = function _applyAttachment (pos) {
+        var buff = this._attachment[pos];
+        var pos_gl = GLConst.AttachmentC.convert(pos);
+        if (buff instanceof GLRenderbuffer) {
+            buff.onContextRestored();
+            gl.framebufferRenderbuffer(gl.FRAMEBUFFER, pos_gl, gl.RENDERBUFFER, buff.id());
+        }
+        else if (buff instanceof GLTexture2D) {
+            buff.onContextRestored();
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, pos_gl, gl.TEXTURE_2D, buff.id(), 0);
+        }
+    };
+    GLFramebuffer.prototype.setVPByPixel = function setVPByPixel (r) {
+        this._vpset = new VPPixel(r);
+    };
+    GLFramebuffer.prototype.setVPByRatio = function setVPByRatio (r) {
+        this._vpset = new VPRatio(r);
+    };
+    GLFramebuffer.prototype.id = function id () {
+        return this._id;
+    };
+    GLFramebuffer.prototype.status = function status () {
+        var statusStr = {};
         statusStr[gl.FRAMEBUFFER_COMPLETE] = "complete";
         statusStr[gl.FRAMEBUFFER_UNSUPPORTED] = "unsupported";
         statusStr[gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT] = "incomplete_attachment";
         statusStr[gl.FRAMEBUFFER_INCOMPLETE_DIMENSIONS] = "incomplete_dimensions";
         statusStr[gl.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT] = "incomplete_missing_attachment";
-    var result = "";
-    this.proc(function () {
-        result = statusStr[gl.checkFramebufferStatus(gl.FRAMEBUFFER)];
-    });
-    return result;
-};
-GLFramebuffer.prototype.attach = function attach (pos, buff) {
+        var result = "";
+        this.proc(function () {
+            result = statusStr[gl.checkFramebufferStatus(gl.FRAMEBUFFER)];
+        });
+        return result;
+    };
+    GLFramebuffer.prototype.attach = function attach (pos, buff) {
         var this$1 = this;
 
-    this._attachment[pos] = buff;
-    this.proc(function () {
-        this$1._applyAttachment(pos);
-    });
-};
-GLFramebuffer.prototype.getAttachment = function getAttachment (pos) {
-    return this._attachment[pos];
-};
-GLFramebuffer.prototype.clear = function clear (pos) {
+        this._attachment[pos] = buff;
+        this.proc(function () {
+            this$1._applyAttachment(pos);
+        });
+    };
+    GLFramebuffer.prototype.getAttachment = function getAttachment (pos) {
+        return this._attachment[pos];
+    };
+    GLFramebuffer.prototype.clear = function clear (pos) {
         var this$1 = this;
 
-    this._attachment[pos] = null;
-    this.proc(function () {
-        this$1._applyAttachment(pos);
-    });
-};
-GLFramebuffer.prototype._setViewport = function _setViewport (r) {
-    gl.viewport(r.left, r.bottom, r.width(), r.height());
-};
-GLFramebuffer.prototype._getViewport = function _getViewport () {
-    var vpA = gl.getParameter(gl.VIEWPORT);
-    return new Rect(vpA[0], vpA[1] + vpA[3], vpA[0] + vpA[2], vpA[1]);
-};
-GLFramebuffer.prototype.vp_proc = function vp_proc (cb) {
+        this._attachment[pos] = null;
+        this.proc(function () {
+            this$1._applyAttachment(pos);
+        });
+    };
+    GLFramebuffer.prototype._setViewport = function _setViewport (r) {
+        gl.viewport(r.left, r.bottom, r.width(), r.height());
+    };
+    GLFramebuffer.prototype._getViewport = function _getViewport () {
+        var vpA = gl.getParameter(gl.VIEWPORT);
+        return new Rect(vpA[0], vpA[1] + vpA[3], vpA[0] + vpA[2], vpA[1]);
+    };
+    GLFramebuffer.prototype.vp_proc = function vp_proc (cb) {
         var this$1 = this;
 
-    this.proc(function () {
-        // 前のビューポートを保存しておく
-        var prev = this$1._getViewport();
-        {
-            var r = this$1.getAttachment(Attachment.Color0);
-            var vp = this$1._vpset.getPixelRect(r.size());
-            this$1._setViewport(vp);
-            cb();
-        }
-        // 前のビューポートを復元
-        this$1._setViewport(prev);
-    });
-};
-// ---------------- from Binable ----------------
-GLFramebuffer.prototype.bind = function bind () {
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(!this._bBind, "already binded");
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.id());
-    this._bBind = true;
-};
-GLFramebuffer.prototype.unbind = function unbind (id) {
+        this.proc(function () {
+            // 前のビューポートを保存しておく
+            var prev = this$1._getViewport();
+            {
+                var r = this$1.getAttachment(Attachment.Color0);
+                var vp = this$1._vpset.getPixelRect(r.size());
+                this$1._setViewport(vp);
+                cb();
+            }
+            // 前のビューポートを復元
+            this$1._setViewport(prev);
+        });
+    };
+    // ---------------- from Binable ----------------
+    GLFramebuffer.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(!this._bBind, "already binded");
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.id());
+        this._bBind = true;
+    };
+    GLFramebuffer.prototype.unbind = function unbind (id) {
         if ( id === void 0 ) id = null;
 
-    Assert(!this.isDiscarded(), "already discarded");
-    Assert(this._bBind, "not binded yet");
-    gl.bindFramebuffer(gl.FRAMEBUFFER, id);
-    this._bBind = false;
-};
-GLFramebuffer.prototype.proc = function proc (cb) {
-    if (this.contextLost())
-        { return; }
-    var prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-    this.bind();
-    cb();
-    this.unbind(prev);
-};
-// ---------------- from Discardable ----------------
-GLFramebuffer.prototype.isDiscarded = function isDiscarded () {
-    return this._rf.isDiscarded();
-};
-GLFramebuffer.prototype.discard = function discard () {
-    Assert(!this._bBind, "still binding somewhere");
-    this.onContextLost();
-    this._rf.discard();
-};
-// ---------------- from GLContext ----------------
-GLFramebuffer.prototype.onContextLost = function onContextLost () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(this._bBind, "not binded yet");
+        gl.bindFramebuffer(gl.FRAMEBUFFER, id);
+        this._bBind = false;
+    };
+    GLFramebuffer.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // ---------------- from GLResourceBase ----------------
+    GLFramebuffer.prototype.discard = function discard (cb) {
         var this$1 = this;
 
-    this._rf.onContextLost(function () {
-        Assert(!this$1._bBind);
-        gl.deleteFramebuffer(this$1._id);
-        this$1._id = null;
-    });
-};
-GLFramebuffer.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-    this._rf.onContextRestored(function () {
-        Assert(!this$1._bBind);
-        this$1._id = gl.createFramebuffer();
-        this$1.proc(function () {
-            for (var i = 0; i < GLConst.AttachmentC.length(); i++) {
-                this$1._applyAttachment(GLConst.AttachmentC.indexToEnum(i));
-            }
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bBind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
         });
-    });
-};
-GLFramebuffer.prototype.contextLost = function contextLost () {
-    return this._rf.contextLost();
-};
+    };
+    // ---------------- from GLContext ----------------
+    GLFramebuffer.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            Assert(!this$1._bBind);
+            gl.deleteFramebuffer(this$1._id);
+            this$1._id = null;
+        });
+    };
+    GLFramebuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            Assert(!this$1._bBind);
+            this$1._id = gl.createFramebuffer();
+            this$1.proc(function () {
+                for (var i = 0; i < GLConst.AttachmentC.length(); i++) {
+                    this$1._applyAttachment(GLConst.AttachmentC.indexToEnum(i));
+                }
+            });
+        });
+    };
+
+    return GLFramebuffer;
+}(GLResourceBase));
 
 var FBSwitch = (function (DObject$$1) {
     function FBSwitch(buffer) {
@@ -5608,15 +5813,22 @@ var WrapRectBase = (function (DObject$$1) {
     if ( DObject$$1 ) WrapRectBase.__proto__ = DObject$$1;
     WrapRectBase.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     WrapRectBase.prototype.constructor = WrapRectBase;
+    WrapRectBase.prototype.setTexture = function setTexture (tex) {
+        if (this._texture)
+            { this._texture.discard(); }
+        if (tex)
+            { tex.acquire(); }
+        this._texture = tex;
+    };
     WrapRectBase.prototype.onDraw = function onDraw () {
-        if (!this.texture) {
-            this.texture = ResourceGen.get(new RPBeta(new Vec3(1, 1, 1)));
+        if (!this._texture) {
+            this.setTexture(ResourceGen.get(new RPBeta(new Vec3(1, 1, 1))));
         }
-        engine.setUniform("u_texture", this.texture);
+        engine.setUniform("u_texture", this._texture);
         engine.setUniform("u_alpha", this.alpha);
         engine.setUniform("u_color", this.color);
-        var ts = this.texture.truesize();
-        var s = this.texture.size();
+        var ts = this._texture.truesize();
+        var s = this._texture.size();
         var uv = new Rect(0, s.height / ts.height, s.width / ts.width, 0);
         engine.setUniform("u_uvcenter", uv.center());
         var vf = this.vflip ? -1 : 1;
@@ -5652,12 +5864,24 @@ var WrapRectAdd = (function (WrapRectBase$$1) {
     return WrapRectAdd;
 }(WrapRectBase));
 
-var Linear = function Linear(duration) {
+var WrapRectT = (function (WrapRectBase$$1) {
+    function WrapRectT() {
+        WrapRectBase$$1.call(this, "rectt");
+    }
+
+    if ( WrapRectBase$$1 ) WrapRectT.__proto__ = WrapRectBase$$1;
+    WrapRectT.prototype = Object.create( WrapRectBase$$1 && WrapRectBase$$1.prototype );
+    WrapRectT.prototype.constructor = WrapRectT;
+
+    return WrapRectT;
+}(WrapRectBase));
+
+var LinearEase = function LinearEase(duration) {
     this._init = 0;
     this._cur = 0;
     this._end = duration;
 };
-Linear.prototype.advance = function advance (dt) {
+LinearEase.prototype.advance = function advance (dt) {
     this._cur += dt;
     if (this._cur >= this._end) {
         this._cur = this._end;
@@ -5665,28 +5889,30 @@ Linear.prototype.advance = function advance (dt) {
     }
     return false;
 };
-Linear.prototype.value = function value () {
+LinearEase.prototype.value = function value () {
     return this._cur / this._end;
 };
-Linear.prototype.reset = function reset () {
+LinearEase.prototype.reset = function reset () {
     this._cur = this._init;
 };
-var Ease = (function (Linear) {
-    function Ease () {
-        Linear.apply(this, arguments);
+
+var SineEase = (function (LinearEase$$1) {
+    function SineEase () {
+        LinearEase$$1.apply(this, arguments);
     }
 
-    if ( Linear ) Ease.__proto__ = Linear;
-    Ease.prototype = Object.create( Linear && Linear.prototype );
-    Ease.prototype.constructor = Ease;
+    if ( LinearEase$$1 ) SineEase.__proto__ = LinearEase$$1;
+    SineEase.prototype = Object.create( LinearEase$$1 && LinearEase$$1.prototype );
+    SineEase.prototype.constructor = SineEase;
 
-    Ease.prototype.value = function value () {
-        var L = Linear.prototype.value.call(this);
+    SineEase.prototype.value = function value () {
+        var L = LinearEase$$1.prototype.value.call(this);
         return Math.sin(L * Math.PI / 2);
     };
 
-    return Ease;
-}(Linear));
+    return SineEase;
+}(LinearEase));
+
 function Lerp(v0, v1, t) {
     return (v1 - v0) * t + v0;
 }
@@ -5694,7 +5920,7 @@ var ImageView = (function (DObject$$1) {
     function ImageView() {
         DObject$$1.call(this, "imageview");
         this._geom = ResourceGen.get(new RPGeometry("Rect01")).data;
-        this._ease = new Ease(0.3);
+        this._ease = new SineEase(0.3);
     }
 
     if ( DObject$$1 ) ImageView.__proto__ = DObject$$1;
@@ -5757,15 +5983,42 @@ var StView = (function (State$$1) {
 var View = (function (Scene$$1) {
     function View(name) {
         Scene$$1.call(this, 0, new StView());
+        Assert(resource.state() === ResState.Idle);
         this.name = name;
     }
 
     if ( Scene$$1 ) View.__proto__ = Scene$$1;
     View.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
     View.prototype.constructor = View;
+    // ---------- from Scene<View> ----------
+    View.prototype.discard = function discard (cb) {
+        Scene$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            resource.popFrame(1);
+        });
+    };
 
     return View;
 }(Scene));
+
+var TextShow = (function (DObject$$1) {
+    function TextShow() {
+        DObject$$1.call(this, "text");
+        this.text = new Text();
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+    }
+
+    if ( DObject$$1 ) TextShow.__proto__ = DObject$$1;
+    TextShow.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextShow.prototype.constructor = TextShow;
+    TextShow.prototype.onDraw = function onDraw () {
+        this.text.draw(this.offset, 65536, 1, this.alpha);
+    };
+
+    return TextShow;
+}(DObject));
 
 var ColRect = (function (Rect$$1) {
     function ColRect () {
@@ -5986,23 +6239,108 @@ var DrawSort;
     };
 })(DrawSort || (DrawSort = {}));
 
+var St_Fadeout = (function (State$$1) {
+    function St_Fadeout() {
+        State$$1.apply(this, arguments);
+        this._ease = new SineEase(1);
+    }
+
+    if ( State$$1 ) St_Fadeout.__proto__ = State$$1;
+    St_Fadeout.prototype = Object.create( State$$1 && State$$1.prototype );
+    St_Fadeout.prototype.constructor = St_Fadeout;
+    St_Fadeout.prototype.onEnter = function onEnter (self, prev) {
+        self._text.text.setText("Complete!");
+    };
+    St_Fadeout.prototype.onUpdate = function onUpdate (self, dt) {
+        if (this._ease.advance(dt))
+            { scene.push(self._next(), true); }
+        self._rect.alpha = 1 - this._ease.value();
+        self._text.alpha = 1 - this._ease.value();
+        self._text.offset = PlaceCenter(engine.size(), self._text.text.resultSize());
+    };
+
+    return St_Fadeout;
+}(State));
+var St_Loading = (function (State$$1) {
+    function St_Loading () {
+        State$$1.apply(this, arguments);
+    }
+
+    if ( State$$1 ) St_Loading.__proto__ = State$$1;
+    St_Loading.prototype = Object.create( State$$1 && State$$1.prototype );
+    St_Loading.prototype.constructor = St_Loading;
+
+    St_Loading.prototype.onUpdate = function onUpdate (self, dt) {
+        self._text.text.setText(("loading... [" + (self._loaded) + "/" + (self._total) + "]"));
+    };
+
+    return St_Loading;
+}(State));
+var LoadFailed$1 = (function (Error) {
+    function LoadFailed(msg) {
+        Error.call(this, msg);
+    }
+
+    if ( Error ) LoadFailed.__proto__ = Error;
+    LoadFailed.prototype = Object.create( Error && Error.prototype );
+    LoadFailed.prototype.constructor = LoadFailed;
+
+    return LoadFailed;
+}(Error));
+var MyLoading = (function (Scene$$1) {
+    function MyLoading(res, cbNext) {
+        var this$1 = this;
+
+        Scene$$1.call(this, 0, new St_Loading());
+        this._next = cbNext;
+        resource.loadFrame(res, {
+            completed: function () {
+                this$1.setState(new St_Fadeout());
+            },
+            error: function (msg) {
+                scene.pop(1, new LoadFailed$1(msg));
+            },
+            progress: function (loaded, total) {
+                this$1._loaded = loaded;
+                this$1._total = total;
+            },
+            taskprogress: function (id, loaded, total) {
+                console.log(("task:" + id + " [" + loaded + " / " + total + "]"));
+            }
+        });
+        var dg = this.asDrawGroup();
+        var cl = new Clear(new Vec4(0, 0, 0, 1));
+        dg.group.add(cl);
+        this._rect = new WrapRectT();
+        this._rect.alpha = 1;
+        this._rect.color = new Vec3(0.1, 0.1, 0.4);
+        dg.group.add(this._rect);
+        var t = new TextShow();
+        var tx = t.text;
+        tx.setText("loading... [000/000]");
+        tx.setSize(new Size(512, 512));
+        tx.setFont(new Font("arial", "2em", "normal", false));
+        t.offset = PlaceCenter(engine.size(), tx.resultSize());
+        dg.group.add(t);
+        this._text = t;
+        this._loaded = 0;
+        this._total = 0;
+        this.setState(new St_Loading());
+    }
+
+    if ( Scene$$1 ) MyLoading.__proto__ = Scene$$1;
+    MyLoading.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
+    MyLoading.prototype.constructor = MyLoading;
+
+    return MyLoading;
+}(Scene));
+
 var Alias$2 = { "hsv": "resource/hsv.glsl", "imageviewf": "resource/imageviewf.fsh", "imageviewv": "resource/imageviewv.vsh", "ps": "resource/ps.prog", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "thumbviewf": "resource/thumbviewf.fsh", "thumbviewv": "resource/thumbviewv.vsh" };
 
 var Alias$4 = { "1day_00": "image_resource/1day_00.jpg", "47_small": "image_resource/47_small.jpg", "alien0_small": "image_resource/alien0_small.jpg", "alien_m_small": "image_resource/alien_m_small.jpg", "aro_keyboard_small": "image_resource/aro_keyboard_small.jpg", "cat_2_draft_small": "image_resource/cat_2_draft_small.jpg", "cat_2_small": "image_resource/cat_2_small.jpg", "chestburster_blood_small": "image_resource/chestburster_blood_small.jpg", "chestburster_white_small": "image_resource/chestburster_white_small.jpg", "creature_small": "image_resource/creature_small.jpg", "d_dogFinal_small": "image_resource/d_dogFinal_small.jpg", "displeased_dragon": "image_resource/displeased_dragon.jpg", "eng_zargo_small": "image_resource/eng_zargo_small.jpg", "facehugger_small": "image_resource/facehugger_small.jpg", "forest_fall_small": "image_resource/forest_fall_small.jpg", "gecko": "image_resource/gecko.jpg", "greenpython_small": "image_resource/greenpython_small.jpg", "husky0_small": "image_resource/husky0_small.jpg", "husky_paint_small": "image_resource/husky_paint_small.jpg", "jz_small": "image_resource/jz_small.jpg", "kakizome_small": "image_resource/kakizome_small.jpg", "kanzume": "image_resource/kanzume.jpg", "licker_small": "image_resource/licker_small.jpg", "lizard0_small": "image_resource/lizard0_small.jpg", "manzoku_ds": "image_resource/manzoku_ds.jpg", "mee_small": "image_resource/mee_small.jpg", "motivation_small": "image_resource/motivation_small.jpg", "muscle0_small": "image_resource/muscle0_small.jpg", "muscle1_small": "image_resource/muscle1_small.jpg", "muscle2_small": "image_resource/muscle2_small.jpg", "muscle_small": "image_resource/muscle_small.jpg", "numakuro_small": "image_resource/numakuro_small.jpg", "okami_ps": "image_resource/okami_ps.jpg", "pika_small": "image_resource/pika_small.jpg", "plates": "image_resource/plates.jpg", "prac2_small": "image_resource/prac2_small.jpg", "python0": "image_resource/python0.jpg", "saliva_final_small": "image_resource/saliva_final_small.jpg", "sand_small": "image_resource/sand_small.jpg", "shard_of_clear_sky_small": "image_resource/shard_of_clear_sky_small.jpg", "skull1_small": "image_resource/skull1_small.jpg", "skull2_small": "image_resource/skull2_small.jpg", "skull3_small": "image_resource/skull3_small.jpg", "skullNF_0_small": "image_resource/skullNF_0_small.jpg", "skullN_0_small": "image_resource/skullN_0_small.jpg", "skullN_1_0_small": "image_resource/skullN_1_0_small.jpg", "skullN_1_1_small": "image_resource/skullN_1_1_small.jpg", "skullN_2_0_small": "image_resource/skullN_2_0_small.jpg", "slime_small": "image_resource/slime_small.jpg", "small_morning_dragon": "image_resource/small_morning_dragon.jpg", "small_shadow_death": "image_resource/small_shadow_death.jpg", "small_simacchau": "image_resource/small_simacchau.jpg", "small_suddenly": "image_resource/small_suddenly.jpg", "small_suddenly_v1": "image_resource/small_suddenly_v1.jpg", "small_suddenly_v2": "image_resource/small_suddenly_v2.jpg", "sphereZ": "image_resource/sphereZ.jpg", "tank_day_small": "image_resource/tank_day_small.jpg", "twilight_creature_small": "image_resource/twilight_creature_small.jpg", "usb_tentacle_final_small": "image_resource/usb_tentacle_final_small.jpg", "wolf0": "image_resource/wolf0.jpg", "wolf1": "image_resource/wolf1.jpg", "wolfTF_C_small": "image_resource/wolfTF_C_small.jpg", "wolfTF_small": "image_resource/wolfTF_small.jpg", "wolf_in_ruins_small": "image_resource/wolf_in_ruins_small.jpg", "wolf_small": "image_resource/wolf_small.jpg", "y10_energy_small": "image_resource/y10_energy_small.jpg", "y10_izakaya_small": "image_resource/y10_izakaya_small.jpg", "y10_poster_small": "image_resource/y10_poster_small.jpg", "y10_rooftop_small": "image_resource/y10_rooftop_small.jpg", "y10_white_small": "image_resource/y10_white_small.jpg" };
 
 var Alias$5 = { "thumbnail-1day_00": "thumbnail/thumbnail-1day_00.jpg", "thumbnail-47_small": "thumbnail/thumbnail-47_small.jpg", "thumbnail-alien0_small": "thumbnail/thumbnail-alien0_small.jpg", "thumbnail-alien_m_small": "thumbnail/thumbnail-alien_m_small.jpg", "thumbnail-aro_keyboard_small": "thumbnail/thumbnail-aro_keyboard_small.jpg", "thumbnail-cat_2_draft_small": "thumbnail/thumbnail-cat_2_draft_small.jpg", "thumbnail-cat_2_small": "thumbnail/thumbnail-cat_2_small.jpg", "thumbnail-chestburster_blood_small": "thumbnail/thumbnail-chestburster_blood_small.jpg", "thumbnail-chestburster_white_small": "thumbnail/thumbnail-chestburster_white_small.jpg", "thumbnail-creature_small": "thumbnail/thumbnail-creature_small.jpg", "thumbnail-d_dogFinal_small": "thumbnail/thumbnail-d_dogFinal_small.jpg", "thumbnail-displeased_dragon": "thumbnail/thumbnail-displeased_dragon.jpg", "thumbnail-eng_zargo_small": "thumbnail/thumbnail-eng_zargo_small.jpg", "thumbnail-facehugger_small": "thumbnail/thumbnail-facehugger_small.jpg", "thumbnail-forest_fall_small": "thumbnail/thumbnail-forest_fall_small.jpg", "thumbnail-gecko": "thumbnail/thumbnail-gecko.jpg", "thumbnail-greenpython_small": "thumbnail/thumbnail-greenpython_small.jpg", "thumbnail-husky0_small": "thumbnail/thumbnail-husky0_small.jpg", "thumbnail-husky_paint_small": "thumbnail/thumbnail-husky_paint_small.jpg", "thumbnail-jz_small": "thumbnail/thumbnail-jz_small.jpg", "thumbnail-kakizome_small": "thumbnail/thumbnail-kakizome_small.jpg", "thumbnail-kanzume": "thumbnail/thumbnail-kanzume.jpg", "thumbnail-licker_small": "thumbnail/thumbnail-licker_small.jpg", "thumbnail-lizard0_small": "thumbnail/thumbnail-lizard0_small.jpg", "thumbnail-manzoku_ds": "thumbnail/thumbnail-manzoku_ds.jpg", "thumbnail-mee_small": "thumbnail/thumbnail-mee_small.jpg", "thumbnail-motivation_small": "thumbnail/thumbnail-motivation_small.jpg", "thumbnail-muscle0_small": "thumbnail/thumbnail-muscle0_small.jpg", "thumbnail-muscle1_small": "thumbnail/thumbnail-muscle1_small.jpg", "thumbnail-muscle2_small": "thumbnail/thumbnail-muscle2_small.jpg", "thumbnail-muscle_small": "thumbnail/thumbnail-muscle_small.jpg", "thumbnail-numakuro_small": "thumbnail/thumbnail-numakuro_small.jpg", "thumbnail-okami_ps": "thumbnail/thumbnail-okami_ps.jpg", "thumbnail-pika_small": "thumbnail/thumbnail-pika_small.jpg", "thumbnail-plates": "thumbnail/thumbnail-plates.jpg", "thumbnail-prac2_small": "thumbnail/thumbnail-prac2_small.jpg", "thumbnail-python0": "thumbnail/thumbnail-python0.jpg", "thumbnail-saliva_final_small": "thumbnail/thumbnail-saliva_final_small.jpg", "thumbnail-sand_small": "thumbnail/thumbnail-sand_small.jpg", "thumbnail-shard_of_clear_sky_small": "thumbnail/thumbnail-shard_of_clear_sky_small.jpg", "thumbnail-skull1_small": "thumbnail/thumbnail-skull1_small.jpg", "thumbnail-skull2_small": "thumbnail/thumbnail-skull2_small.jpg", "thumbnail-skull3_small": "thumbnail/thumbnail-skull3_small.jpg", "thumbnail-skullNF_0_small": "thumbnail/thumbnail-skullNF_0_small.jpg", "thumbnail-skullN_0_small": "thumbnail/thumbnail-skullN_0_small.jpg", "thumbnail-skullN_1_0_small": "thumbnail/thumbnail-skullN_1_0_small.jpg", "thumbnail-skullN_1_1_small": "thumbnail/thumbnail-skullN_1_1_small.jpg", "thumbnail-skullN_2_0_small": "thumbnail/thumbnail-skullN_2_0_small.jpg", "thumbnail-slime_small": "thumbnail/thumbnail-slime_small.jpg", "thumbnail-small_morning_dragon": "thumbnail/thumbnail-small_morning_dragon.jpg", "thumbnail-small_shadow_death": "thumbnail/thumbnail-small_shadow_death.jpg", "thumbnail-small_simacchau": "thumbnail/thumbnail-small_simacchau.jpg", "thumbnail-small_suddenly": "thumbnail/thumbnail-small_suddenly.jpg", "thumbnail-small_suddenly_v1": "thumbnail/thumbnail-small_suddenly_v1.jpg", "thumbnail-small_suddenly_v2": "thumbnail/thumbnail-small_suddenly_v2.jpg", "thumbnail-sphereZ": "thumbnail/thumbnail-sphereZ.jpg", "thumbnail-tank_day_small": "thumbnail/thumbnail-tank_day_small.jpg", "thumbnail-twilight_creature_small": "thumbnail/thumbnail-twilight_creature_small.jpg", "thumbnail-usb_tentacle_final_small": "thumbnail/thumbnail-usb_tentacle_final_small.jpg", "thumbnail-wolf0": "thumbnail/thumbnail-wolf0.jpg", "thumbnail-wolf1": "thumbnail/thumbnail-wolf1.jpg", "thumbnail-wolfTF_C_small": "thumbnail/thumbnail-wolfTF_C_small.jpg", "thumbnail-wolfTF_small": "thumbnail/thumbnail-wolfTF_small.jpg", "thumbnail-wolf_in_ruins_small": "thumbnail/thumbnail-wolf_in_ruins_small.jpg", "thumbnail-wolf_small": "thumbnail/thumbnail-wolf_small.jpg", "thumbnail-y10_energy_small": "thumbnail/thumbnail-y10_energy_small.jpg", "thumbnail-y10_izakaya_small": "thumbnail/thumbnail-y10_izakaya_small.jpg", "thumbnail-y10_poster_small": "thumbnail/thumbnail-y10_poster_small.jpg", "thumbnail-y10_rooftop_small": "thumbnail/thumbnail-y10_rooftop_small.jpg", "thumbnail-y10_white_small": "thumbnail/thumbnail-y10_white_small.jpg" };
 
-var WrapRectT = (function (WrapRectBase$$1) {
-    function WrapRectT() {
-        WrapRectBase$$1.call(this, "rectt");
-    }
-
-    if ( WrapRectBase$$1 ) WrapRectT.__proto__ = WrapRectBase$$1;
-    WrapRectT.prototype = Object.create( WrapRectBase$$1 && WrapRectBase$$1.prototype );
-    WrapRectT.prototype.constructor = WrapRectT;
-
-    return WrapRectT;
-}(WrapRectBase));
 // particle dance
 var StParticle = (function (State$$1) {
     function StParticle() {
@@ -6094,8 +6432,8 @@ var StParticle = (function (State$$1) {
             this._tvV = 0;
         }
         this._gauss.setSource(this._tex.current());
-        this._fr.texture = this._gauss.result();
-        self.drawTarget = dg;
+        this._fr.setTexture(this._gauss.result());
+        self.drawTarget.set(dg);
         {
             var wt = new WrapRectT();
             this._loadingBg = wt;
@@ -6119,6 +6457,7 @@ var StParticle = (function (State$$1) {
             var dg = self.asDrawGroup();
             dg.group.remove(this._loadingBg);
             dg.group.remove(this._loadText);
+            this._bLoading = false;
         }
     };
     StParticle.prototype.onUpdate = function onUpdate (self, dt) {
@@ -6139,8 +6478,9 @@ var StParticle = (function (State$$1) {
                 var res = key[ret];
                 resource.loadFrame([res], {
                     completed: function () {
-                        this$1._bLoading = false;
-                        scene.push(new View(res), false);
+                        var v = new View(res);
+                        scene.push(v, false);
+                        v.discard();
                     },
                     taskprogress: function (taskIndex, loaded, total) {
                         var text = "Loading... " + (Math.floor(loaded / 1024)) + "kb / " + (Math.floor(total / 1024)) + "kb";
@@ -6158,7 +6498,7 @@ var StParticle = (function (State$$1) {
         }
         this._tex.swap();
         this._fb.attach(Attachment.Color0, this._tex.current());
-        this._fr_m.texture = this._tex.prev();
+        this._fr_m.setTexture(this._tex.prev());
         this._gauss.setSource(this._tex.current());
         this._alpha += dt / 2;
         this._psp.advance(dt);
@@ -6243,56 +6583,6 @@ var MyScene = (function (Scene$$1) {
 
     return MyScene;
 }(Scene));
-var TextShow = (function (DObject$$1) {
-    function TextShow() {
-        DObject$$1.call(this, "text");
-        this.text = new Text();
-        this.offset = new Vec2(0, 0);
-        this.alpha = 1;
-    }
-
-    if ( DObject$$1 ) TextShow.__proto__ = DObject$$1;
-    TextShow.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    TextShow.prototype.constructor = TextShow;
-    TextShow.prototype.onDraw = function onDraw () {
-        this.text.draw(this.offset, 65536, 1, this.alpha);
-    };
-
-    return TextShow;
-}(DObject));
-var MyLoading = (function (LoadingScene$$1) {
-    function MyLoading(res, cbNext) {
-        var this$1 = this;
-
-        LoadingScene$$1.call(this, res, cbNext, function (loaded, total) {
-            this$1._loaded = loaded;
-            this$1._total = total;
-        }, function (id, loaded, total) {
-        });
-        var t = new TextShow();
-        var tx = t.text;
-        tx.setText("loading... [000/000]");
-        tx.setSize(new Size(512, 512));
-        tx.setFont(new Font("arial", "2em", "normal", false));
-        t.drawtag.priority = 10;
-        t.offset = PlaceCenter(engine.size(), tx.resultSize());
-        this.asDrawGroup().group.add(t);
-        this._text = t;
-        this._loaded = 0;
-        this._total = 0;
-    }
-
-    if ( LoadingScene$$1 ) MyLoading.__proto__ = LoadingScene$$1;
-    MyLoading.prototype = Object.create( LoadingScene$$1 && LoadingScene$$1.prototype );
-    MyLoading.prototype.constructor = MyLoading;
-    MyLoading.prototype.onUpdate = function onUpdate (dt) {
-        this._text.text.setText(("loading... [" + (this._loaded) + "/" + (this._total) + "]"));
-        return LoadingScene$$1.prototype.onUpdate.call(this, dt);
-    };
-
-    return MyLoading;
-}(LoadingScene));
-
 window.onload = function () {
     var onError = function (name) {
         throw Error(("duplicate resource \"" + name + "\""));

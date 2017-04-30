@@ -41,6 +41,15 @@
 			"vshader": "rectv",
 			"fshader": "rectf"
 		},
+		"rectt": {
+			"boolset": ["Blend"],
+			"valueset": {
+				"BlendFunc": ["SrcAlpha", "OneMinusSrcAlpha", "Zero", "One"],
+				"BlendEquation": ["Add"]
+			},
+			"vshader": "rectv",
+			"fshader": "rectf"
+		},
 		"gaussh": {
 			"valueset": "gauss",
 			"vshader": "gaussh",
