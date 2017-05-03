@@ -1,16 +1,18 @@
 (function () {
 'use strict';
 
-var State = function State () {};
-
-State.prototype.onEnter = function onEnter (self, prev) { };
-State.prototype.onExit = function onExit (self, next) { };
-State.prototype.onUpdate = function onUpdate (self, dt) { };
-State.prototype.onDown = function onDown (self, ret) { };
-State.prototype.onUp = function onUp (self) { };
-
-var BeginState = new State();
-var EndState = new State();
+var gl;
+function SetGL(g) { gl = g; }
+var engine;
+function SetEngine(e) { engine = e; }
+var resource;
+function SetResource(r) { resource = r; }
+var input;
+function SetInput(i) { input = i; }
+var scene;
+function SetScene(s) { scene = s; }
+var glres;
+function SetGLRes(r) { glres = r; }
 
 // 数学関連のクラス
 var TM;
@@ -404,10 +406,16 @@ var RequestAnimationFrame = window.requestAnimationFrame
     || (function () {
         return window.webkitRequestAnimationFrame ||
             function (cb) {
-                window.setTimeout(cb, 1000 / 60);
+                return window.setTimeout(cb, 1000 / 60);
             };
     })();
-
+var CancelAnimationFrame = window.cancelAnimationFrame
+    || (function () {
+        return window.webkitCancelAnimationFrame ||
+            function (id) {
+                window.clearTimeout(id);
+            };
+    })();
 
 
 function LowBits32(b) {
@@ -423,6 +431,9 @@ function GetPowValue(v) {
         { return 1; }
     --v;
     return (v & ~LowBits32(v >>> 1)) << 1;
+}
+function Lerp(v0, v1, t) {
+    return (v1 - v0) * t + v0;
 }
 
 var RefCount = function RefCount() {
@@ -456,14 +467,266 @@ var BaseObject = (function (RefCount$$1) {
     BaseObject.prototype.alive = function alive () {
         return this._bAlive;
     };
+    BaseObject.prototype.aliveCB = function aliveCB (cb) {
+        if (this.alive()) {
+            cb();
+            return this.alive();
+        }
+        return false;
+    };
     BaseObject.prototype.destroy = function destroy () {
         var ret = this._bAlive;
         this._bAlive = false;
         return ret;
     };
+    BaseObject.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            if (this$1.alive())
+                { this$1.destroy(); }
+        });
+    };
 
     return BaseObject;
 }(RefCount));
+
+var GObject = (function (BaseObject$$1) {
+    function GObject(priority) {
+        if ( priority === void 0 ) priority = 0;
+
+        BaseObject$$1.call(this);
+        this.priority = priority;
+    }
+
+    if ( BaseObject$$1 ) GObject.__proto__ = BaseObject$$1;
+    GObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
+    GObject.prototype.constructor = GObject;
+    GObject.prototype.onUpdate = function onUpdate (dt) {
+        return this.alive();
+    };
+    GObject.prototype.onDown = function onDown (ret) { };
+    GObject.prototype.onUp = function onUp () { };
+
+    return GObject;
+}(BaseObject));
+
+var State = function State () {};
+
+State.prototype.onEnter = function onEnter (self, prev) { };
+State.prototype.onExit = function onExit (self, next) { };
+State.prototype.onUpdate = function onUpdate (self, dt) { };
+State.prototype.onDown = function onDown (self, ret) { };
+State.prototype.onUp = function onUp (self) { };
+
+var BeginState = new State();
+var EndState = new State();
+
+var FSMachine = (function (GObject$$1) {
+    function FSMachine(p, state) {
+        GObject$$1.call(this, p);
+        this._state = state;
+        this._nextState = null;
+        state.onEnter(this, BeginState);
+    }
+
+    if ( GObject$$1 ) FSMachine.__proto__ = GObject$$1;
+    FSMachine.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    FSMachine.prototype.constructor = FSMachine;
+    FSMachine.prototype._doSwitchState = function _doSwitchState () {
+        var this$1 = this;
+
+        for (;;) {
+            var ns = this$1._nextState;
+            if (!ns)
+                { break; }
+            this$1._nextState = null;
+            var old = this$1._state;
+            old.onExit(this$1, ns);
+            this$1._state = ns;
+            ns.onEnter(this$1, old);
+        }
+    };
+    FSMachine.prototype.setState = function setState (st) {
+        Assert(!this._nextState);
+        this._nextState = st;
+    };
+    FSMachine.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        return GObject$$1.prototype.aliveCB.call(this, function () {
+            this$1._state.onUpdate(this$1, dt);
+            this$1._doSwitchState();
+        });
+    };
+    FSMachine.prototype.onDown = function onDown (ret) {
+        this._state.onDown(this, ret);
+    };
+    FSMachine.prototype.onUp = function onUp () {
+        this._state.onUp(this);
+    };
+    // --------------- from BaseObject ---------------
+    FSMachine.prototype.destroy = function destroy () {
+        if (GObject$$1.prototype.destroy.call(this)) {
+            this.setState(EndState);
+            this._doSwitchState();
+            return true;
+        }
+        return false;
+    };
+
+    return FSMachine;
+}(GObject));
+
+var Group = (function (RefCount$$1) {
+    function Group() {
+        RefCount$$1.apply(this, arguments);
+        this._group = [];
+        this._add = null;
+        this._remove = null;
+    }
+
+    if ( RefCount$$1 ) Group.__proto__ = RefCount$$1;
+    Group.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    Group.prototype.constructor = Group;
+    Group.prototype.group = function group () { return this._group; };
+    Group.prototype._doAdd = function _doAdd (cbAdd) {
+        var this$1 = this;
+
+        var addL = this._add;
+        if (addL) {
+            addL.forEach(function (obj) {
+                cbAdd(obj, this$1);
+                this$1._group.push(obj);
+            });
+            this._add = null;
+            return true;
+        }
+        return false;
+    };
+    Group.prototype._removeSingle = function _removeSingle (obj) {
+        // 線形探索
+        var g = this._group;
+        var len = g.length;
+        for (var i = 0; i < len; i++) {
+            if (g[i] === obj) {
+                g[i].discard();
+                g.splice(i, 1);
+            }
+        }
+    };
+    Group.prototype._doRemove = function _doRemove () {
+        var this$1 = this;
+
+        var remL = this._remove;
+        if (remL) {
+            var len = remL.length;
+            for (var i = 0; i < len; i++)
+                { this$1._removeSingle(remL[i]); }
+            this._remove = null;
+            return true;
+        }
+        return false;
+    };
+    Group.prototype._sort = function _sort (cbSort) {
+        this._group.sort(cbSort);
+    };
+    Group.prototype.doAddRemove = function doAddRemove (cbAdd) {
+        return this._doAdd(cbAdd) || this._doRemove();
+    };
+    Group.prototype.proc = function proc (cbAdd, cbSort, bRefr) {
+        if (this.doAddRemove(cbAdd) || bRefr) {
+            if (cbSort)
+                { this._sort(cbSort); }
+        }
+    };
+    Group.prototype.add = function add (obj, bUnique) {
+        if (!this._add)
+            { this._add = []; }
+        if (!bUnique)
+            { obj.acquire(); }
+        this._add.push(obj);
+    };
+    Group.prototype.remove = function remove (obj) {
+        if (!this._remove)
+            { this._remove = []; }
+        this._remove.push(obj);
+    };
+    Group.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.clear();
+        });
+    };
+    Group.prototype.clear = function clear () {
+        var g = this._group;
+        for (var i = 0; i < g.length; i++) {
+            g[i].discard();
+        }
+        this._group = [];
+        var a = this._add;
+        if (a) {
+            for (var i$1 = 0; i$1 < a.length; i$1++) {
+                a[i$1].discard();
+            }
+            this._add = null;
+        }
+        this._remove = null;
+    };
+
+    return Group;
+}(RefCount));
+
+var UpdGroup = (function (GObject$$1) {
+    function UpdGroup(p) {
+        GObject$$1.call(this, p);
+        this.group = new Group();
+    }
+
+    if ( GObject$$1 ) UpdGroup.__proto__ = GObject$$1;
+    UpdGroup.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    UpdGroup.prototype.constructor = UpdGroup;
+    UpdGroup.prototype._doAddRemove = function _doAddRemove () {
+        var cbAdd = function (obj, g) { };
+        var cbSort = function (a, b) {
+            if (a.priority > b.priority)
+                { return 1; }
+            else if (a.priority === b.priority)
+                { return 0; }
+            return -1;
+        };
+        this.group.proc(cbAdd, cbSort);
+    };
+    UpdGroup.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        this._doAddRemove();
+        var g = this.group.group();
+        for (var i = 0; i < g.length; i++) {
+            if (!g[i].onUpdate(dt))
+                { this$1.group.remove(g[i]); }
+        }
+        this._doAddRemove();
+        return true;
+    };
+    // ------------ from GObject ------------
+    UpdGroup.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GObject$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.group.discard();
+        });
+    };
+
+    return UpdGroup;
+}(GObject));
 
 // 描画ソートをする為の優先度値など
 // 描画ソートをする為の優先度値など
@@ -489,18 +752,182 @@ var DObject = (function (BaseObject$$1) {
     return DObject;
 }(BaseObject));
 
-var gl;
-function SetGL(g) { gl = g; }
-var engine;
-function SetEngine(e) { engine = e; }
-var resource;
-function SetResource(r) { resource = r; }
-var input;
-function SetInput(i) { input = i; }
-var scene;
-function SetScene(s) { scene = s; }
-var glres;
-function SetGLRes(r) { glres = r; }
+var DrawGroup = (function (DObject$$1) {
+    function DrawGroup() {
+        DObject$$1.call(this, null);
+        this.group = new Group();
+        this._bRefr = true;
+    }
+
+    if ( DObject$$1 ) DrawGroup.__proto__ = DObject$$1;
+    DrawGroup.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    DrawGroup.prototype.constructor = DrawGroup;
+    DrawGroup.prototype.setSortAlgorithm = function setSortAlgorithm (a) {
+        this._sortAlg = a;
+        this._bRefr = true;
+    };
+    DrawGroup.prototype._proc = function _proc () {
+        var this$1 = this;
+
+        var cbAdd = function (obj, g) { };
+        var cbSort;
+        if (this._sortAlg) {
+            cbSort = function (a, b) {
+                return this$1._sortAlg(a.drawtag, b.drawtag);
+            };
+        }
+        this.group.proc(cbAdd, cbSort, this._bRefr);
+        this._bRefr = false;
+    };
+    DrawGroup.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        this._proc();
+        var g = this.group.group();
+        for (var i = 0; i < g.length; i++) {
+            var obj = g[i];
+            engine.applyTag(obj.drawtag);
+            if (!obj.onDraw()) {
+                this$1.group.remove(obj);
+            }
+        }
+        this._proc();
+        return true;
+    };
+    DrawGroup.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        DObject$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.group.discard();
+        });
+    };
+
+    return DrawGroup;
+}(DObject));
+
+var SharedPtr = (function (RefCount$$1) {
+    function SharedPtr(target) {
+        RefCount$$1.call(this);
+        this.set(target);
+    }
+
+    if ( RefCount$$1 ) SharedPtr.__proto__ = RefCount$$1;
+    SharedPtr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    SharedPtr.prototype.constructor = SharedPtr;
+    SharedPtr.prototype.set = function set (t) {
+        if (this._target)
+            { this._target.discard(); }
+        if (t)
+            { t.acquire(); }
+        this._target = t;
+    };
+    SharedPtr.prototype.get = function get () {
+        return this._target;
+    };
+    SharedPtr.prototype.reset = function reset () {
+        this.set();
+    };
+    // -------- from RefCount --------
+    SharedPtr.prototype.discard = function discard () {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (this$1._target)
+                { this$1._target.discard(); }
+            this$1._target = undefined;
+        });
+    };
+
+    return SharedPtr;
+}(RefCount));
+
+var Scene = (function (FSMachine$$1) {
+    function Scene() {
+        FSMachine$$1.apply(this, arguments);
+        this.updateTarget = new SharedPtr(new UpdGroup(0));
+        this.drawTarget = new SharedPtr(new DrawGroup());
+    }
+
+    if ( FSMachine$$1 ) Scene.__proto__ = FSMachine$$1;
+    Scene.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
+    Scene.prototype.constructor = Scene;
+    Scene.prototype.asUpdateGroup = function asUpdateGroup () {
+        Assert(this.updateTarget.get() instanceof UpdGroup);
+        return this.updateTarget.get();
+    };
+    Scene.prototype.asDrawGroup = function asDrawGroup () {
+        Assert(this.drawTarget.get() instanceof DrawGroup);
+        return this.drawTarget.get();
+    };
+    Scene.prototype.onUpdate = function onUpdate (dt) {
+        FSMachine$$1.prototype.onUpdate.call(this, dt);
+        this.updateTarget.get().onUpdate(dt);
+        return true;
+    };
+    Scene.prototype.onDraw = function onDraw () {
+        this.drawTarget.get().onDraw();
+        return true;
+    };
+    // ----------------- from Drawable|Updatable -----------------
+    Scene.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        FSMachine$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1.updateTarget.discard();
+            this$1.drawTarget.discard();
+        });
+    };
+
+    return Scene;
+}(FSMachine));
+
+var LoadFailed = (function (Error) {
+    function LoadFailed(msg) {
+        Error.call(this, msg);
+    }
+
+    if ( Error ) LoadFailed.__proto__ = Error;
+    LoadFailed.prototype = Object.create( Error && Error.prototype );
+    LoadFailed.prototype.constructor = LoadFailed;
+
+    return LoadFailed;
+}(Error));
+var St = (function (State$$1) {
+    function St () {
+        State$$1.apply(this, arguments);
+    }if ( State$$1 ) St.__proto__ = State$$1;
+    St.prototype = Object.create( State$$1 && State$$1.prototype );
+    St.prototype.constructor = St;
+
+    
+
+    return St;
+}(State));
+var LoadingScene = (function (Scene$$1) {
+    function LoadingScene(res, nextScene, cbProgress, cbTaskProgress) {
+        Scene$$1.call(this, 0, new St());
+        resource.loadFrame(res, {
+            completed: function () {
+                scene.push(nextScene(), true, true);
+            },
+            error: function (msg) {
+                scene.pop(1, new LoadFailed(msg));
+            },
+            progress: cbProgress || function () { },
+            taskprogress: cbTaskProgress || function () { }
+        });
+    }
+
+    if ( Scene$$1 ) LoadingScene.__proto__ = Scene$$1;
+    LoadingScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
+    LoadingScene.prototype.constructor = LoadingScene;
+
+    return LoadingScene;
+}(Scene));
 
 var Clear = (function (DObject$$1) {
     function Clear(color, depth, stencil) {
@@ -514,21 +941,25 @@ var Clear = (function (DObject$$1) {
     Clear.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     Clear.prototype.constructor = Clear;
     Clear.prototype.onDraw = function onDraw () {
-        var flag = 0;
-        if (this.color) {
-            var c = this.color;
-            gl.clearColor(c.x, c.y, c.z, c.w);
-            flag |= gl.COLOR_BUFFER_BIT;
-        }
-        if (this.depth) {
-            gl.clearDepth(this.depth);
-            flag |= gl.DEPTH_BUFFER_BIT;
-        }
-        if (this.stencil) {
-            gl.clearStencil(this.stencil);
-            flag |= gl.STENCIL_BUFFER_BIT;
-        }
-        gl.clear(flag);
+        var this$1 = this;
+
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            var flag = 0;
+            if (this$1.color) {
+                var c = this$1.color;
+                gl.clearColor(c.x, c.y, c.z, c.w);
+                flag |= gl.COLOR_BUFFER_BIT;
+            }
+            if (this$1.depth) {
+                gl.clearDepth(this$1.depth);
+                flag |= gl.DEPTH_BUFFER_BIT;
+            }
+            if (this$1.stencil) {
+                gl.clearStencil(this$1.stencil);
+                flag |= gl.STENCIL_BUFFER_BIT;
+            }
+            gl.clear(flag);
+        });
     };
 
     return Clear;
@@ -1120,54 +1551,96 @@ var Camera3D = (function (Pose3D$$1) {
     return Camera3D;
 }(Pose3D));
 
-var SysUnif3D = function SysUnif3D() {
-    this.camera = new Camera3D();
-    this.worldMatrix = Mat44.Identity();
-};
-SysUnif3D.prototype.apply = function apply (prog) {
-    if (prog.hasUniform("u_mWorld")) {
-        prog.setUniform("u_mWorld", this.worldMatrix);
-    }
-    if (prog.hasUniform("u_mTrans")) {
-        var m = this.camera.getViewProjection().mulSelf(this.worldMatrix);
-        prog.setUniform("u_mTrans", m);
-    }
-    if (prog.hasUniform("u_eyePos")) {
-        prog.setUniform("u_eyePos", this.camera.pos);
-    }
-};
-
-var GLResourceBase = (function (RefCount$$1) {
-    function GLResourceBase() {
-        RefCount$$1.apply(this, arguments);
-        this._bLost = true;
+var StIdle = (function (State$$1) {
+    function StIdle () {
+        State$$1.apply(this, arguments);
     }
 
-    if ( RefCount$$1 ) GLResourceBase.__proto__ = RefCount$$1;
-    GLResourceBase.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
-    GLResourceBase.prototype.constructor = GLResourceBase;
-    // -------------- from GLContext --------------
-    GLResourceBase.prototype.onContextLost = function onContextLost (cb) {
-        Assert(this.count() > 0);
-        if (this._bLost)
-            { return; }
-        this._bLost = true;
-        cb();
-    };
-    GLResourceBase.prototype.onContextRestored = function onContextRestored (cb) {
-        Assert(this.count() > 0);
-        if (!this._bLost)
-            { return; }
-        this._bLost = false;
-        cb();
-    };
-    GLResourceBase.prototype.contextLost = function contextLost () {
-        Assert(this.count() > 0);
-        return this._bLost;
+    if ( State$$1 ) StIdle.__proto__ = State$$1;
+    StIdle.prototype = Object.create( State$$1 && State$$1.prototype );
+    StIdle.prototype.constructor = StIdle;
+
+    StIdle.prototype.onUpdate = function onUpdate (self, dt) {
+        if (input.isMKeyPressed(0)) {
+            self.setState(new StLook());
+        }
+        else {
+            var c = self.camera;
+            var dx = 0, dy = 0;
+            // A = 65
+            if (input.isKeyPressing(65)) {
+                dx = -1;
+                // D = 68
+            }
+            else if (input.isKeyPressing(68)) {
+                dx = 1;
+            }
+            // W = 87
+            if (input.isKeyPressing(87)) {
+                dy = 1;
+                // S = 83
+            }
+            else if (input.isKeyPressing(83)) {
+                dy = -1;
+            }
+            var r = c.rot.right();
+            c.pos.addSelf(r.mul(dx * dt * self._speed));
+            var u = c.rot.dir();
+            c.pos.addSelf(u.mul(dy * dt * self._speed));
+        }
     };
 
-    return GLResourceBase;
-}(RefCount));
+    return StIdle;
+}(State));
+var StLook = (function (State$$1) {
+    function StLook () {
+        State$$1.apply(this, arguments);
+    }
+
+    if ( State$$1 ) StLook.__proto__ = State$$1;
+    StLook.prototype = Object.create( State$$1 && State$$1.prototype );
+    StLook.prototype.constructor = StLook;
+
+    StLook.prototype.onUpdate = function onUpdate (self, dt) {
+        if (!input.isMKeyPressing(0)) {
+            self.setState(new StIdle());
+        }
+        else {
+            var d = input.positionDelta();
+            self._yaw += d.x * self._rotSpeed;
+            self._pitch -= d.y * self._rotSpeed;
+            var pi = Math.PI;
+            self._pitch = Saturation(self._pitch, -(pi / 2 - 0.01), (pi / 2 - 0.01));
+            var c = self.camera;
+            c.rot = Quat.RotationYPR(self._yaw, self._pitch, 0);
+            c.rot.normalizeSelf();
+        }
+    };
+
+    return StLook;
+}(State));
+var FPSCamera = (function (FSMachine$$1) {
+    function FPSCamera() {
+        FSMachine$$1.call(this, 0, new StIdle());
+        this._yaw = this._pitch = 0;
+        this._speed = 3;
+        this._rotSpeed = 0.003;
+        var c = new Camera3D();
+        c.fov = TM$1.Deg2rad(90);
+        var s = engine.size();
+        c.aspect = s.width / s.height;
+        c.nearZ = 0.01;
+        c.farZ = 200;
+        c.pos = new Vec3(0, 0, -1);
+        this.camera = c;
+    }
+
+    if ( FSMachine$$1 ) FPSCamera.__proto__ = FSMachine$$1;
+    FPSCamera.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
+    FPSCamera.prototype.constructor = FPSCamera;
+
+    return FPSCamera;
+}(FSMachine));
 
 var EnumBase;
 (function (EnumBase) {
@@ -1589,6 +2062,303 @@ GLConst.GLTypeInfo = {};
 GLConst.Type2GLType = {};
 GLConst.ValueSetting = {};
 
+var GLResourceBase = (function (RefCount$$1) {
+    function GLResourceBase() {
+        RefCount$$1.apply(this, arguments);
+        this._bLost = true;
+    }
+
+    if ( RefCount$$1 ) GLResourceBase.__proto__ = RefCount$$1;
+    GLResourceBase.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    GLResourceBase.prototype.constructor = GLResourceBase;
+    // -------------- from GLContext --------------
+    GLResourceBase.prototype.onContextLost = function onContextLost (cb) {
+        Assert(this.count() > 0);
+        if (this._bLost)
+            { return; }
+        this._bLost = true;
+        cb();
+    };
+    GLResourceBase.prototype.onContextRestored = function onContextRestored (cb) {
+        Assert(this.count() > 0);
+        if (!this._bLost)
+            { return; }
+        this._bLost = false;
+        cb();
+    };
+    GLResourceBase.prototype.contextLost = function contextLost () {
+        Assert(this.count() > 0);
+        return this._bLost;
+    };
+
+    return GLResourceBase;
+}(RefCount));
+
+var GLBufferInfo = function GLBufferInfo(usage, typeinfo, 
+    // 頂点の個数
+    nElem, 
+    // 要素何個分で頂点一つ分か
+    dim, 
+    // バックアップ用のデータ
+    backup) {
+    this.usage = usage;
+    this.typeinfo = typeinfo;
+    this.nElem = nElem;
+    this.dim = dim;
+    this.backup = backup;
+};
+var GLBuffer = (function (GLResourceBase$$1) {
+    function GLBuffer() {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bBind = false;
+        glres.add(this);
+    }
+
+    if ( GLResourceBase$$1 ) GLBuffer.__proto__ = GLResourceBase$$1;
+    GLBuffer.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLBuffer.prototype.constructor = GLBuffer;
+    GLBuffer.prototype.id = function id () {
+        return this._id;
+    };
+    GLBuffer.prototype.usage = function usage () {
+        return this._info.usage;
+    };
+    GLBuffer.prototype.typeinfo = function typeinfo () {
+        return this._info.typeinfo;
+    };
+    GLBuffer.prototype.nElem = function nElem () {
+        return this._info.nElem;
+    };
+    GLBuffer.prototype.dim = function dim () {
+        return this._info.dim;
+    };
+    GLBuffer.prototype._typeId = function _typeId () {
+        return GLConst.BufferTypeC.convert(this.typeId());
+    };
+    GLBuffer.prototype._typeQueryId = function _typeQueryId () {
+        return GLConst.BufferQueryC.convert(this.typeQueryId());
+    };
+    GLBuffer.prototype._usage = function _usage () {
+        return GLConst.DrawTypeC.convert(this.usage());
+    };
+    GLBuffer.prototype.allocate = function allocate (fmt, nElem, dim, usage, bRestore) {
+        var this$1 = this;
+
+        var t = GLConst.GLTypeInfo[GLConst.DataFormatC.convert(fmt)];
+        Assert(Boolean(t));
+        var bytelen = nElem * dim * t.bytesize;
+        this._info = new GLBufferInfo(usage, t, nElem, dim, bRestore ? new ArrayBuffer(bytelen) : undefined);
+        this.proc(function () {
+            gl.bufferData(this$1._typeId(), bytelen, this$1._usage());
+        });
+    };
+    GLBuffer.prototype._setData = function _setData (data, info, nElem, dim, usage, bRestore) {
+        var this$1 = this;
+
+        var restoreData;
+        if (bRestore) {
+            restoreData = data.slice(0);
+        }
+        this._info = new GLBufferInfo(usage, info, nElem, dim, restoreData);
+        this.proc(function () {
+            gl.bufferData(this$1._typeId(), data, this$1._usage());
+        });
+    };
+    GLBuffer.prototype.setData = function setData (data, dim, usage, bRestore) {
+        var t = GLConst.Type2GLType[data.constructor.name];
+        this._setData(data.buffer, t, data.length / dim, dim, usage, bRestore);
+    };
+    GLBuffer.prototype.setVectorData = function setVectorData (data, usage, bRestore) {
+        this.setData(VectorToArray.apply(void 0, data), data[0].dim(), usage, bRestore);
+    };
+    GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
+        var this$1 = this;
+
+        var info = this._info;
+        var ofs = info.typeinfo.bytesize * offset_elem;
+        if (info.backup) {
+            var dst = new Uint8Array(info.backup);
+            var src = new Uint8Array(data);
+            for (var i = 0; i < data.byteLength; i++)
+                { dst[ofs + i] = src[i]; }
+        }
+        this.proc(function () {
+            gl.bufferSubData(this$1._typeId(), ofs, data);
+        });
+    };
+    // --------- from Bindable ---------
+    GLBuffer.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(!this._bBind, "already binded");
+        gl.bindBuffer(this._typeId(), this.id());
+        this._bBind = true;
+    };
+    GLBuffer.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+        Assert(this._bBind, "not binded yet");
+        gl.bindBuffer(this._typeId(), id);
+        this._bBind = false;
+    };
+    GLBuffer.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(this._typeQueryId());
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // --------- from GLResourceBase ---------
+    GLBuffer.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bBind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+    // --------- from GLContext ---------
+    GLBuffer.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteBuffer(this$1.id());
+            this$1._id = null;
+        });
+    };
+    GLBuffer.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._id = gl.createBuffer();
+            if (this$1._info) {
+                // 必要ならデータを復元
+                var bd = this$1._info.backup;
+                if (bd) {
+                    this$1._setData(bd, this$1.typeinfo(), this$1.nElem(), this$1.dim(), this$1.usage(), true);
+                }
+            }
+        });
+    };
+
+    return GLBuffer;
+}(GLResourceBase));
+
+var GLVBuffer = (function (GLBuffer$$1) {
+    function GLVBuffer () {
+        GLBuffer$$1.apply(this, arguments);
+    }
+
+    if ( GLBuffer$$1 ) GLVBuffer.__proto__ = GLBuffer$$1;
+    GLVBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
+    GLVBuffer.prototype.constructor = GLVBuffer;
+
+    GLVBuffer.prototype.typeId = function typeId () {
+        return BufferType.Vertex;
+    };
+    GLVBuffer.prototype.typeQueryId = function typeQueryId () {
+        return BufferQuery.Vertex;
+    };
+
+    return GLVBuffer;
+}(GLBuffer));
+
+function Rand01() {
+    return (Math.random() - 0.5) * 2;
+}
+var Points = function Points() {
+    this.position = [];
+    this.hsv = [];
+};
+var Alg = function Alg(n) {
+    this._nP = n;
+    this._veloc = [];
+};
+Alg.prototype.initialize = function initialize () {
+    var ret = new Points();
+    var vpos = ret.position;
+    var vhsv = ret.hsv;
+    var veloc = this._veloc;
+    for (var i = 0; i < this._nP; i++) {
+        vpos[i] = new Vec3(Rand01(), -1, Rand01());
+        veloc[i] = new Vec3(Rand01(), 0.1, Rand01()).normalizeSelf();
+        vhsv[i] = new Vec3(Math.random(), 0.8, 1);
+    }
+    return ret;
+};
+Alg.prototype.advance = function advance (points, dt) {
+    var veloc = this._veloc;
+    var len = veloc.length;
+    for (var i = 0; i < len; i++) {
+        points.position[i].addSelf(veloc[i].mul(dt));
+        var dir = points.position[i].minus();
+        dir.mulSelf(dt);
+        veloc[i] = veloc[i].add(dir).normalize();
+    }
+};
+var PSprite = function PSprite(alg) {
+    this._alg = alg;
+    this._points = alg.initialize();
+    var vbc = new GLVBuffer();
+    vbc.setVectorData(this._points.hsv, DrawType.Dynamic, true);
+    var vb = new GLVBuffer();
+    vb.setVectorData(this._points.position, DrawType.Dynamic, true);
+    this._geom = {
+        vbuffer: {
+            a_position: vb,
+            a_hsv: vbc
+        },
+        type: Primitive.Points
+    };
+    this.hueOffset = 0;
+};
+PSprite.prototype.advance = function advance (dt) {
+    this._alg.advance(this._points, dt);
+    var vr = VectorToArray.apply(void 0, this._points.position);
+    this._geom.vbuffer.a_position.setSubData(0, vr.buffer);
+    var vsv = VectorToArray.apply(void 0, this._points.hsv);
+    this._geom.vbuffer.a_hsv.setSubData(0, vsv.buffer);
+};
+PSprite.prototype.draw = function draw (alpha) {
+    if (this.texture)
+        { engine.setUniform("u_texture", this.texture); }
+    engine.sys3d().worldMatrix = Mat44.Identity();
+    engine.setUniform("u_alpha", alpha);
+    engine.setUniform("u_hue", this.hueOffset);
+    engine.drawGeometry(this._geom);
+};
+var PSpriteDraw = (function (DObject$$1) {
+    function PSpriteDraw(n) {
+        DObject$$1.call(this, "psprite");
+        this._psprite = new PSprite(new Alg(n));
+        var tex = resource.getResource("sphere");
+        tex.setLinear(true, true, 0);
+        this._psprite.texture = tex;
+        this.alpha = 1;
+    }
+
+    if ( DObject$$1 ) PSpriteDraw.__proto__ = DObject$$1;
+    PSpriteDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    PSpriteDraw.prototype.constructor = PSpriteDraw;
+    PSpriteDraw.prototype.advance = function advance (dt) {
+        this._psprite.hueOffset += dt * 0.1;
+        this._psprite.advance(dt / 2);
+    };
+    PSpriteDraw.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            this$1._psprite.draw(this$1.alpha);
+        });
+    };
+
+    return PSpriteDraw;
+}(DObject));
+
 var Size = function Size(width, height) {
     this.width = width;
     this.height = height;
@@ -1642,323 +2412,93 @@ Size.prototype.clone = function clone () {
     return new Size(this.width, this.height);
 };
 
-var Rect = function Rect(left, top, right, bottom) {
-    this.left = left;
-    this.top = top;
-    this.right = right;
-    this.bottom = bottom;
+var Range = function Range(from, to) {
+    this.from = from;
+    this.to = to;
 };
-// 左下とサイズを指定して矩形を生成
-Rect.FromPointSize = function FromPointSize (lb, s) {
-    return Rect.FromPoints(lb, lb.add(s.toVec2()));
+Range.prototype.width = function width () {
+    return this.to - this.from;
 };
-// 左下と右上の座標から矩形を生成
-Rect.FromPoints = function FromPoints (lb, rt) {
-    return new Rect(lb.x, rt.y, rt.x, lb.y);
-};
-Rect.prototype.shrinkAt = function shrinkAt (s, pos) {
-    return new Rect((this.left - pos.x) * s + pos.x, (this.top - pos.y) * s + pos.y, (this.right - pos.x) * s + pos.x, (this.bottom - pos.y) * s + pos.y);
-};
-// 指定の倍率で拡縮
-Rect.prototype.shrink = function shrink (s) {
-    return this.shrinkAt(s, this.center());
-};
-// 左下の座標
-Rect.prototype.lb = function lb () {
-    return new Vec2(this.left, this.bottom);
-};
-// 右上の座標
-Rect.prototype.rt = function rt () {
-    return new Vec2(this.right, this.top);
-};
-Rect.prototype.width = function width () {
-    return this.right - this.left;
-};
-Rect.prototype.height = function height () {
-    return this.top - this.bottom;
-};
-Rect.prototype.add = function add (ofs) {
-    return new Rect(this.left + ofs.x, this.top + ofs.y, this.right + ofs.x, this.bottom + ofs.y);
-};
-Rect.prototype.mul = function mul (sc) {
-    return new Rect(this.left * sc.x, this.top * sc.y, this.right * sc.x, this.bottom * sc.y);
-};
-Rect.prototype.toSize = function toSize () {
-    return new Size(this.width(), this.height());
-};
-Rect.prototype.toVec4 = function toVec4 () {
-    return new Vec4(this.left, this.top, this.right, this.bottom);
-};
-// 中心座標をベクトルで取得
-Rect.prototype.center = function center () {
-    return new Vec2((this.left + this.right) / 2, (this.top + this.bottom) / 2);
-};
-Rect.prototype.clone = function clone () {
-    return new Rect(this.left, this.top, this.right, this.bottom);
+Range.prototype.move = function move (ofs) {
+    this.from += ofs;
+    this.to += ofs;
 };
 
-var Backup;
-(function (Backup) {
-    var Wrap = function Wrap(s, t) {
-        this.s = s;
-        this.t = t;
-    };
-    Wrap.prototype.apply = function apply (tex) {
-        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_S, GLConst.UVWrapC.convert(this.s));
-        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_T, GLConst.UVWrapC.convert(this.t));
+var LinearTimer = function LinearTimer(init, end) {
+    this.cur = 0;
+    this.range = new Range(0, 0);
+    this.range.from = init;
+    this.range.to = end;
+};
+LinearTimer.prototype.reset = function reset () {
+    this.cur = this.range.from;
+};
+LinearTimer.prototype.get = function get () {
+    return this.cur;
+};
+LinearTimer.prototype.advance = function advance (dt) {
+    if (this.cur >= this.range.to) {
         return true;
-    };
-    Backup.Wrap = Wrap;
-    var Filter = function Filter(minLinear, magLinear, iMip) {
-        this.minLinear = minLinear;
-        this.magLinear = magLinear;
-        this.iMip = iMip;
-    };
-    Filter.prototype.apply = function apply (tex) {
-        // [iMip][bL]
-        var flags = [
-            gl.NEAREST,
-            gl.LINEAR,
-            gl.NEAREST_MIPMAP_NEAREST,
-            gl.NEAREST_MIPMAP_LINEAR,
-            gl.LINEAR_MIPMAP_NEAREST,
-            gl.LINEAR_MIPMAP_LINEAR
-        ];
-        gl.texParameteri(tex._typeId(), gl.TEXTURE_MIN_FILTER, flags[(this.iMip << 1) | Number(this.minLinear)]);
-        gl.texParameteri(tex._typeId(), gl.TEXTURE_MAG_FILTER, flags[Number(this.magLinear)]);
-    };
-    Backup.Filter = Filter;
-    var ImageData = function ImageData(fmt, srcFmt, srcFmtType, obj) {
-        this.fmt = fmt;
-        this.srcFmt = srcFmt;
-        this.srcFmtType = srcFmtType;
-        this.obj = obj;
-    };
-    ImageData.prototype.apply = function apply (tex) {
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this.fmt), GLConst.InterFormatC.convert(this.srcFmt), GLConst.TexDataFormatC.convert(this.srcFmtType), this.obj);
-    };
-    Backup.ImageData = ImageData;
-    var PixelData = function PixelData(size, fmt, align, flip, pixels) {
-        this._dstFmt = fmt;
-        if (fmt === InterFormat.RGBA) {
-            this._dim = 4;
-        }
-        else {
-            this._dim = 1;
-        }
-        if (pixels)
-            { this._pixels = pixels; }
-        else
-            { this._pixels = new Uint8Array(size.width * size.height * this._dim); }
-        this._alignment = align;
-        this._flip = flip;
-    };
-    PixelData.prototype.apply = function apply (tex) {
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, this._alignment);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, this._flip);
-        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this._dstFmt), tex.truesize().width, tex.truesize().height, 0, GLConst.InterFormatC.convert(this._dstFmt), GLConst.TexDataFormatC.convert(TexDataFormat.UB), this._pixels);
-    };
-    PixelData.prototype.writeSubData = function writeSubData (dstWidth, px, py, srcWidth, pixels) {
-        BlockPlace(this._pixels, dstWidth, this._dim, px, py, pixels, srcWidth);
-    };
-    Backup.PixelData = PixelData;
-    var Index;
-    (function (Index) {
-        Index[Index["Base"] = 0] = "Base";
-        Index[Index["Filter"] = 1] = "Filter";
-        Index[Index["Wrap"] = 2] = "Wrap";
-    })(Index = Backup.Index || (Backup.Index = {}));
-    var Flag;
-    (function (Flag) {
-        Flag[Flag["Base"] = 1] = "Base";
-        Flag[Flag["Filter"] = 2] = "Filter";
-        Flag[Flag["Wrap"] = 4] = "Wrap";
-        Flag[Flag["_Num"] = 3] = "_Num";
-        Flag[Flag["All"] = 255] = "All";
-    })(Flag = Backup.Flag || (Backup.Flag = {}));
-})(Backup || (Backup = {}));
-var GLTexture = (function (GLResourceBase$$1) {
-    function GLTexture() {
-        GLResourceBase$$1.call(this);
-        this._id = null;
-        this._bind = 0;
-        this._size = new Size(0, 0);
-        this._param = [
-            null,
-            new Backup.Filter(false, false, 0),
-            new Backup.Wrap(UVWrap.Clamp, UVWrap.Clamp) ];
-        glres.add(this);
+    }
+    this.cur += dt;
+    return false;
+};
+
+var TextDraw = (function (DObject$$1) {
+    function TextDraw(text, delay) {
+        DObject$$1.call(this, "text");
+        this._text = text;
+        this.timer = new LinearTimer(0, text.length() + delay);
+        this.offset = new Vec2(0, 0);
+        this.alpha = 1;
+        this.delay = delay;
     }
 
-    if ( GLResourceBase$$1 ) GLTexture.__proto__ = GLResourceBase$$1;
-    GLTexture.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
-    GLTexture.prototype.constructor = GLTexture;
-    GLTexture.prototype._typeId = function _typeId () {
-        return GLConst.TextureC.convert(this.typeId());
+    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
+    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    TextDraw.prototype.constructor = TextDraw;
+    TextDraw.prototype.advance = function advance (dt) {
+        return this.timer.advance(dt);
     };
-    GLTexture.prototype._typeQueryId = function _typeQueryId () {
-        return GLConst.TextureQueryC.convert(this.typeQueryId());
-    };
-    GLTexture.prototype._applyParams = function _applyParams (flag) {
+    TextDraw.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        var at = 0x01;
-        for (var i = 0; i < Backup.Flag._Num; i++) {
-            if (flag & at) {
-                var p = this$1._param[i];
-                if (p)
-                    { p.apply(this$1); }
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            this$1._text.draw(this$1.offset, this$1.timer.get(), this$1.delay, this$1.alpha);
+        });
+    };
+
+    return TextDraw;
+}(DObject));
+
+var Font = (function () {
+    function anonymous(family, size, weight, italic) {
+        this.family = family;
+        this.size = size;
+        this.weight = weight;
+        this.italic = italic;
+    }
+    anonymous.prototype.fontstr = function fontstr () {
+        var this$1 = this;
+
+        var res = "";
+        if (this.italic)
+            { res += "italic"; }
+        var add = function (ent) {
+            var val = this$1[ent];
+            if (val) {
+                res += " ";
+                res += String(val);
             }
-            at <<= 1;
-        }
-    };
-    GLTexture.prototype.uvrect = function uvrect () {
-        return GLTexture.UVRect01;
-    };
-    GLTexture.prototype.id = function id () {
-        return this._id;
-    };
-    GLTexture.prototype.size = function size () {
-        return this._size;
-    };
-    GLTexture.prototype.truesize = function truesize () {
-        return this._size;
-    };
-    GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
-        var this$1 = this;
-
-        this._param[Backup.Index.Filter] = new Backup.Filter(bLMin, bLMag, iMip);
-        this.proc(function () {
-            this$1._applyParams(Backup.Flag.Filter);
-        });
-    };
-    GLTexture.prototype.setWrap = function setWrap (s, t) {
-        var this$1 = this;
-        if ( t === void 0 ) t = s;
-
-        this._param[Backup.Index.Wrap] = new Backup.Wrap(s, t);
-        this.proc(function () {
-            this$1._applyParams(Backup.Flag.Wrap);
-        });
-    };
-    GLTexture.prototype.setData = function setData (fmt, width, height, srcFmt, srcFmtType, pixels) {
-        var this$1 = this;
-
-        Assert(srcFmtType === TexDataFormat.UB);
-        var assign;
-        (assign = [width, height], this._size.width = assign[0], this._size.height = assign[1]);
-        if (typeof pixels !== "undefined")
-            { pixels = pixels.slice(0); }
-        this._param[Backup.Index.Base] = new Backup.PixelData(this.truesize(), fmt, 1, false, pixels);
-        this.proc(function () {
-            this$1._applyParams(Backup.Flag.All);
-        });
-    };
-    GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, pixels) {
-        var this$1 = this;
-
-        Assert(srcFmtType === TexDataFormat.UB);
-        var base = this._param[Backup.Index.Base];
-        base.writeSubData(this.truesize().width, rect.left, rect.bottom, rect.width(), pixels);
-        this.proc(function () {
-            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-            gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.bottom, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
-        });
-    };
-    GLTexture.prototype.setImage = function setImage (fmt, srcFmt, srcFmtType, obj) {
-        var this$1 = this;
-
-        Assert(srcFmtType === TexDataFormat.UB);
-        obj = obj.cloneNode(true);
-        var assign;
-        (assign = [obj.width, obj.height], this._size.width = assign[0], this._size.height = assign[1]);
-        this._param[Backup.Index.Base] = new Backup.ImageData(fmt, srcFmt, srcFmtType, obj);
-        this.proc(function () {
-            this$1._applyParams(Backup.Flag.All);
-        });
-    };
-    GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType, obj) {
-        var this$1 = this;
-
-        Assert(srcFmtType === TexDataFormat.UB);
-        this.proc(function () {
-            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-            gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
-        });
-    };
-    GLTexture.prototype.genMipmap = function genMipmap () {
-        var this$1 = this;
-
-        this.proc(function () {
-            gl.generateMipmap(this$1._typeId());
-        });
-    };
-    GLTexture.prototype.bind_loose = function bind_loose () {
-        Assert(this.count() > 0, "already discarded");
-        gl.bindTexture(this._typeId(), this.id());
-        ++this._bind;
-    };
-    // ----------------- from GLContext -----------------
-    GLTexture.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
-            gl.deleteTexture(this$1._id);
-            this$1._id = null;
-        });
-    };
-    GLTexture.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
-            this$1._id = gl.createTexture();
-            this$1.proc(function () {
-                this$1._applyParams(Backup.Flag.All);
-            });
-        });
-    };
-    // ----------------- from Bindable -----------------
-    GLTexture.prototype.bind = function bind () {
-        Assert(this.count() > 0, "already discarded");
-        Assert(this._bind === 0, "already binded");
-        gl.bindTexture(this._typeId(), this.id());
-        ++this._bind;
-    };
-    GLTexture.prototype.unbind = function unbind (id) {
-        if ( id === void 0 ) id = null;
-
-        Assert(this._bind > 0, "not binded yet");
-        gl.bindTexture(this._typeId(), id);
-        --this._bind;
-    };
-    GLTexture.prototype.proc = function proc (cb) {
-        if (this.contextLost())
-            { return; }
-        var prev = gl.getParameter(this._typeQueryId());
-        this.bind();
-        cb();
-        this.unbind(prev);
-    };
-    // ----------------- from GLResourceBase -----------------
-    GLTexture.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.discard.call(this, function () {
-            Assert(!this$1._bind, "still binding somewhere");
-            if (cb)
-                { cb(); }
-            this$1.onContextLost();
-            glres.remove(this$1);
-        });
+        };
+        add("weight");
+        add("size");
+        add("family");
+        return res;
     };
 
-    return GLTexture;
-}(GLResourceBase));
-GLTexture.UVRect01 = new Rect(0, 1, 1, 0);
+    return anonymous;
+}());
 
 /// <reference path="arrayfunc.ts" />
 var ResourceExtToType = {};
@@ -2286,6 +2826,339 @@ var ImageLoader = (function (XHRLoader$$1) {
 
     return ImageLoader;
 }(XHRLoader));
+
+var Rect = function Rect(left, top, right, bottom) {
+    this.left = left;
+    this.top = top;
+    this.right = right;
+    this.bottom = bottom;
+};
+// 左下とサイズを指定して矩形を生成
+Rect.FromPointSize = function FromPointSize (lb, s) {
+    return Rect.FromPoints(lb, lb.add(s.toVec2()));
+};
+// 左下と右上の座標から矩形を生成
+Rect.FromPoints = function FromPoints (lb, rt) {
+    return new Rect(lb.x, rt.y, rt.x, lb.y);
+};
+Rect.FromVec4 = function FromVec4 (v) {
+    var va = v.value;
+    return new Rect(va[0], va[1], va[2], va[3]);
+};
+Rect.prototype.set = function set (r) {
+    this.left = r.left;
+    this.top = r.top;
+    this.right = r.right;
+    this.bottom = r.bottom;
+    return this;
+};
+Rect.prototype.shrinkAt = function shrinkAt (s, pos) {
+    return new Rect((this.left - pos.x) * s.x + pos.x, (this.top - pos.y) * s.y + pos.y, (this.right - pos.x) * s.x + pos.x, (this.bottom - pos.y) * s.y + pos.y);
+};
+// 指定の倍率で拡縮
+Rect.prototype.shrink = function shrink (s) {
+    return this.shrinkAt(s, this.center());
+};
+// 左下の座標
+Rect.prototype.lb = function lb () {
+    return new Vec2(this.left, this.bottom);
+};
+// 右上の座標
+Rect.prototype.rt = function rt () {
+    return new Vec2(this.right, this.top);
+};
+Rect.prototype.width = function width () {
+    return this.right - this.left;
+};
+Rect.prototype.height = function height () {
+    return this.top - this.bottom;
+};
+Rect.prototype.add = function add (ofs) {
+    return new Rect(this.left + ofs.x, this.top + ofs.y, this.right + ofs.x, this.bottom + ofs.y);
+};
+Rect.prototype.mul = function mul (sc) {
+    return new Rect(this.left * sc.x, this.top * sc.y, this.right * sc.x, this.bottom * sc.y);
+};
+Rect.prototype.toSize = function toSize () {
+    return new Size(this.width(), this.height());
+};
+Rect.prototype.toVec4 = function toVec4 () {
+    return new Vec4(this.left, this.top, this.right, this.bottom);
+};
+// 中心座標をベクトルで取得
+Rect.prototype.center = function center () {
+    return new Vec2((this.left + this.right) / 2, (this.top + this.bottom) / 2);
+};
+Rect.prototype.clone = function clone () {
+    return new Rect(this.left, this.top, this.right, this.bottom);
+};
+Rect.prototype.lerp = function lerp (r, t) {
+    var v0 = this.toVec4(), v1 = r.toVec4();
+    return Rect.FromVec4(v0.lerp(v1, t));
+};
+
+var Backup;
+(function (Backup) {
+    var Wrap = function Wrap(s, t) {
+        this.s = s;
+        this.t = t;
+    };
+    Wrap.prototype.apply = function apply (tex) {
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_S, GLConst.UVWrapC.convert(this.s));
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_WRAP_T, GLConst.UVWrapC.convert(this.t));
+        return true;
+    };
+    Backup.Wrap = Wrap;
+    var Filter = function Filter(minLinear, magLinear, iMip) {
+        this.minLinear = minLinear;
+        this.magLinear = magLinear;
+        this.iMip = iMip;
+    };
+    Filter.prototype.apply = function apply (tex) {
+        // [iMip][bL]
+        var flags = [
+            gl.NEAREST,
+            gl.LINEAR,
+            gl.NEAREST_MIPMAP_NEAREST,
+            gl.NEAREST_MIPMAP_LINEAR,
+            gl.LINEAR_MIPMAP_NEAREST,
+            gl.LINEAR_MIPMAP_LINEAR
+        ];
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_MIN_FILTER, flags[(this.iMip << 1) | Number(this.minLinear)]);
+        gl.texParameteri(tex._typeId(), gl.TEXTURE_MAG_FILTER, flags[Number(this.magLinear)]);
+    };
+    Backup.Filter = Filter;
+    var ImageData = function ImageData(fmt, srcFmt, srcFmtType, obj) {
+        this.fmt = fmt;
+        this.srcFmt = srcFmt;
+        this.srcFmtType = srcFmtType;
+        this.obj = obj;
+    };
+    ImageData.prototype.apply = function apply (tex) {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this.fmt), GLConst.InterFormatC.convert(this.srcFmt), GLConst.TexDataFormatC.convert(this.srcFmtType), this.obj);
+    };
+    Backup.ImageData = ImageData;
+    var PixelData = function PixelData(size, fmt, align, flip, pixels) {
+        this._dstFmt = fmt;
+        if (fmt === InterFormat.RGBA) {
+            this._dim = 4;
+        }
+        else {
+            this._dim = 1;
+        }
+        if (pixels)
+            { this._pixels = pixels; }
+        else
+            { this._pixels = new Uint8Array(size.width * size.height * this._dim); }
+        this._alignment = align;
+        this._flip = flip;
+    };
+    PixelData.prototype.apply = function apply (tex) {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, this._alignment);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, this._flip);
+        gl.texImage2D(tex._typeId(), 0, GLConst.InterFormatC.convert(this._dstFmt), tex.truesize().width, tex.truesize().height, 0, GLConst.InterFormatC.convert(this._dstFmt), GLConst.TexDataFormatC.convert(TexDataFormat.UB), this._pixels);
+    };
+    PixelData.prototype.writeSubData = function writeSubData (dstWidth, px, py, srcWidth, pixels) {
+        BlockPlace(this._pixels, dstWidth, this._dim, px, py, pixels, srcWidth);
+    };
+    Backup.PixelData = PixelData;
+    var Index;
+    (function (Index) {
+        Index[Index["Base"] = 0] = "Base";
+        Index[Index["Filter"] = 1] = "Filter";
+        Index[Index["Wrap"] = 2] = "Wrap";
+    })(Index = Backup.Index || (Backup.Index = {}));
+    var Flag;
+    (function (Flag) {
+        Flag[Flag["Base"] = 1] = "Base";
+        Flag[Flag["Filter"] = 2] = "Filter";
+        Flag[Flag["Wrap"] = 4] = "Wrap";
+        Flag[Flag["_Num"] = 3] = "_Num";
+        Flag[Flag["All"] = 255] = "All";
+    })(Flag = Backup.Flag || (Backup.Flag = {}));
+})(Backup || (Backup = {}));
+var GLTexture = (function (GLResourceBase$$1) {
+    function GLTexture() {
+        GLResourceBase$$1.call(this);
+        this._id = null;
+        this._bind = 0;
+        this._size = new Size(0, 0);
+        this._param = [
+            null,
+            new Backup.Filter(false, false, 0),
+            new Backup.Wrap(UVWrap.Clamp, UVWrap.Clamp) ];
+        glres.add(this);
+    }
+
+    if ( GLResourceBase$$1 ) GLTexture.__proto__ = GLResourceBase$$1;
+    GLTexture.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLTexture.prototype.constructor = GLTexture;
+    GLTexture.prototype._typeId = function _typeId () {
+        return GLConst.TextureC.convert(this.typeId());
+    };
+    GLTexture.prototype._typeQueryId = function _typeQueryId () {
+        return GLConst.TextureQueryC.convert(this.typeQueryId());
+    };
+    GLTexture.prototype._applyParams = function _applyParams (flag) {
+        var this$1 = this;
+
+        var at = 0x01;
+        for (var i = 0; i < Backup.Flag._Num; i++) {
+            if (flag & at) {
+                var p = this$1._param[i];
+                if (p)
+                    { p.apply(this$1); }
+            }
+            at <<= 1;
+        }
+    };
+    GLTexture.prototype.uvrect = function uvrect () {
+        return GLTexture.UVRect01;
+    };
+    GLTexture.prototype.id = function id () {
+        return this._id;
+    };
+    GLTexture.prototype.size = function size () {
+        return this._size;
+    };
+    GLTexture.prototype.truesize = function truesize () {
+        return this._size;
+    };
+    GLTexture.prototype.setLinear = function setLinear (bLMin, bLMag, iMip) {
+        var this$1 = this;
+
+        this._param[Backup.Index.Filter] = new Backup.Filter(bLMin, bLMag, iMip);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.Filter);
+        });
+    };
+    GLTexture.prototype.setWrap = function setWrap (s, t) {
+        var this$1 = this;
+        if ( t === void 0 ) t = s;
+
+        this._param[Backup.Index.Wrap] = new Backup.Wrap(s, t);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.Wrap);
+        });
+    };
+    GLTexture.prototype.setData = function setData (fmt, width, height, srcFmt, srcFmtType, pixels) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        var assign;
+        (assign = [width, height], this._size.width = assign[0], this._size.height = assign[1]);
+        if (typeof pixels !== "undefined")
+            { pixels = pixels.slice(0); }
+        this._param[Backup.Index.Base] = new Backup.PixelData(this.truesize(), fmt, 1, false, pixels);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.All);
+        });
+    };
+    GLTexture.prototype.setSubData = function setSubData (rect, srcFmt, srcFmtType, pixels) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        var base = this._param[Backup.Index.Base];
+        base.writeSubData(this.truesize().width, rect.left, rect.bottom, rect.width(), pixels);
+        this.proc(function () {
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texSubImage2D(this$1._typeId(), 0, rect.left, rect.bottom, rect.width(), rect.height(), GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), pixels);
+        });
+    };
+    GLTexture.prototype.setImage = function setImage (fmt, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        obj = obj.cloneNode(true);
+        var assign;
+        (assign = [obj.width, obj.height], this._size.width = assign[0], this._size.height = assign[1]);
+        this._param[Backup.Index.Base] = new Backup.ImageData(fmt, srcFmt, srcFmtType, obj);
+        this.proc(function () {
+            this$1._applyParams(Backup.Flag.All);
+        });
+    };
+    GLTexture.prototype.setSubImage = function setSubImage (x, y, srcFmt, srcFmtType, obj) {
+        var this$1 = this;
+
+        Assert(srcFmtType === TexDataFormat.UB);
+        this.proc(function () {
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texSubImage2D(this$1._typeId(), 0, x, y, GLConst.InterFormatC.convert(srcFmt), GLConst.TexDataFormatC.convert(srcFmtType), obj);
+        });
+    };
+    GLTexture.prototype.genMipmap = function genMipmap () {
+        var this$1 = this;
+
+        this.proc(function () {
+            gl.generateMipmap(this$1._typeId());
+        });
+    };
+    GLTexture.prototype.bind_loose = function bind_loose () {
+        Assert(this.count() > 0, "already discarded");
+        gl.bindTexture(this._typeId(), this.id());
+        ++this._bind;
+    };
+    // ----------------- from GLContext -----------------
+    GLTexture.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            gl.deleteTexture(this$1._id);
+            this$1._id = null;
+        });
+    };
+    GLTexture.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._id = gl.createTexture();
+            this$1.proc(function () {
+                this$1._applyParams(Backup.Flag.All);
+            });
+        });
+    };
+    // ----------------- from Bindable -----------------
+    GLTexture.prototype.bind = function bind () {
+        Assert(this.count() > 0, "already discarded");
+        Assert(this._bind === 0, "already binded");
+        gl.bindTexture(this._typeId(), this.id());
+        ++this._bind;
+    };
+    GLTexture.prototype.unbind = function unbind (id) {
+        if ( id === void 0 ) id = null;
+
+        Assert(this._bind > 0, "not binded yet");
+        gl.bindTexture(this._typeId(), id);
+        --this._bind;
+    };
+    GLTexture.prototype.proc = function proc (cb) {
+        if (this.contextLost())
+            { return; }
+        var prev = gl.getParameter(this._typeQueryId());
+        this.bind();
+        cb();
+        this.unbind(prev);
+    };
+    // ----------------- from GLResourceBase -----------------
+    GLTexture.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.discard.call(this, function () {
+            Assert(!this$1._bind, "still binding somewhere");
+            if (cb)
+                { cb(); }
+            this$1.onContextLost();
+            glres.remove(this$1);
+        });
+    };
+
+    return GLTexture;
+}(GLResourceBase));
+GLTexture.UVRect01 = new Rect(0, 1, 1, 0);
 
 var GLTexture2D = (function (GLTexture$$1) {
     function GLTexture2D () {
@@ -3016,1522 +3889,6 @@ ResourceGenSrc.WebGL = function (rp) {
     }
     throw Error("webgl not found");
 };
-
-var Engine = function Engine() {
-    this._doubling = 1;
-    this._sys3d = new SysUnif3D();
-    this._tech = {};
-    this._size = new Size(0, 0);
-    this._initGL();
-};
-Engine.prototype._onResized = function _onResized () {
-    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
-    var w = window.innerWidth, h = window.innerHeight;
-    this._size = new Size(w, h);
-    var dbl = this._doubling;
-    var assign;
-        (assign = [w / dbl, h / dbl], canvas.data.width = assign[0], canvas.data.height = assign[1]);
-    gl.viewport(0, 0, w / dbl, h / dbl);
-    canvas.data.style.cssText = "width:100%;height:100%";
-};
-Engine.prototype.sys3d = function sys3d () {
-    return this._sys3d;
-};
-Engine.prototype.size = function size () {
-    return this._size;
-};
-Engine.prototype._initGL = function _initGL () {
-        var this$1 = this;
-
-    Assert(!gl, "already initialized");
-    SetGL(ResourceGen.get(new RPWebGLCtx(Engine.CanvasName)).data);
-    if (!gl)
-        { throw new Error("WebGL not supported."); }
-    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
-    canvas.data.addEventListener("webglcontextlost", function (e) {
-        glres.onContextLost();
-    });
-    canvas.data.addEventListener("webglcontextrestored", function (e) {
-        glres.onContextRestored();
-    });
-    window.onresize = function () {
-        this$1._onResized();
-    };
-    this._onResized();
-    new GLConst(gl);
-};
-Engine.prototype.draw = function draw (cb) {
-        var this$1 = this;
-
-    var prog = this.technique().program;
-    this.sys3d().apply(prog);
-    var tc = 0;
-    var tex = [];
-    Object.keys(this._unif).forEach(function (k) {
-        var v = this$1._unif[k];
-        if (v instanceof GLTexture) {
-            gl.activeTexture(gl.TEXTURE0 + tc);
-            v.bind_loose();
-            prog.setUniform(k, tc++);
-            tex.push(v);
-        }
-        else {
-            prog.setUniform(k, v);
-        }
-    });
-    cb();
-    for (var i = 0; i < tex.length; i++)
-        { tex[i].unbind(); }
-};
-Engine.prototype.setUniforms = function setUniforms (tbl) {
-    JoinEntries(this._unif, tbl);
-};
-Engine.prototype.setUniform = function setUniform (name, value) {
-    this._unif[name] = value;
-};
-Engine.prototype.addTechnique = function addTechnique (sh) {
-        var this$1 = this;
-
-    var techL = sh.technique();
-    Object.keys(techL).forEach(function (k) {
-        var v = techL[k];
-        this$1._tech[k] = v;
-    });
-};
-Engine.prototype.setTechnique = function setTechnique (name) {
-    if (this._active)
-        { this._active.program.unbind(); }
-    this._active = this._tech[name];
-    this._activeName = name;
-    if (!this._active)
-        { throw new Error(("No such technique: " + name)); }
-    this._active.valueset.apply();
-    this._active.program.bind();
-    this._unif = {};
-};
-Engine.prototype.techName = function techName () {
-    return this._activeName;
-};
-Engine.prototype.technique = function technique () {
-    return this._active;
-};
-Engine.prototype.program = function program () {
-    return this.technique().program;
-};
-Engine.prototype.applyTag = function applyTag (tag) {
-    if (tag.technique !== null) {
-        var apl = true;
-        var tech = this.techName();
-        if (tech) {
-            if (tech === tag.technique)
-                { apl = false; }
-        }
-        if (apl)
-            { this.setTechnique(tag.technique); }
-    }
-};
-Engine.prototype.drawGeometry = function drawGeometry (geom) {
-        var this$1 = this;
-
-    this.draw(function () {
-        var idxL = [];
-        var vbg = geom.vbuffer;
-        var count = 0;
-        for (var name in vbg) {
-            var vb = vbg[name];
-            count = vb.nElem();
-            idxL.push(this$1.program().setVStream(name, vb));
-        }
-        var ib = geom.ibuffer;
-        var glflag = GLConst.PrimitiveC.convert(geom.type);
-        if (ib) {
-            ib.proc(function () {
-                gl.drawElements(glflag, ib.nElem(), ib.typeinfo().id, 0);
-            });
-        }
-        else {
-            gl.drawArrays(glflag, 0, count);
-        }
-        for (var i = 0; i < idxL.length; i++)
-            { gl.disableVertexAttribArray(idxL[i]); }
-    });
-};
-Engine.prototype.getScreenCoord = function getScreenCoord (pos) {
-    pos = pos.clone();
-    var s = this.size();
-    var w2 = s.width / 2, h2 = s.height / 2;
-    pos.x = pos.x / w2 - 1;
-    pos.y = -pos.y / h2 + 1;
-    return pos;
-};
-
-Engine.CanvasName = "maincanvas";
-
-var InputBuff = function InputBuff() {
-    this.key = {};
-    this.mkey = {};
-    this.wheelDelta = new Vec2(0);
-    this.pos = null;
-    this.dblClick = 0;
-};
-
-var InputFlag = function InputFlag() {
-    this._key = {};
-    this._keyMask = {};
-    this._mkey = {};
-    this._mkeyMask = {};
-    this._wheelDelta = new Vec2(0);
-    this._pos = new Vec2(0);
-    this._dblClick = false;
-    this._positionDelta = new Vec2(0);
-};
-InputFlag.prototype.update = function update (ns) {
-    var Proc = function (m0, m1) {
-        for (var k in m0) {
-            if (m0[k] === -1)
-                { delete m0[k]; }
-            else
-                { ++m0[k]; }
-        }
-        for (var k$1 in m1) {
-            if (m1[k$1] === true) {
-                if (!(m0[k$1] >= 1))
-                    { m0[k$1] = 1; }
-            }
-            else {
-                m0[k$1] = -1;
-            }
-        }
-    };
-    // Keyboard
-    Proc(this._key, ns.key);
-    // Mouse
-    Proc(this._mkey, ns.mkey);
-    // Wheel
-    this._wheelDelta = ns.wheelDelta;
-    // DoubleClick
-    this._dblClick = (ns.dblClick) ? true : false;
-    // PositionDelta
-    if (ns.pos)
-        { this._positionDelta = ns.pos.sub(this._pos); }
-    else
-        { this._positionDelta = new Vec2(0); }
-    // Pos
-    if (ns.pos)
-        { this._pos = ns.pos.clone(); }
-    this._keyMask = {};
-    this._mkeyMask = {};
-};
-InputFlag.prototype._getMMask = function _getMMask (code) {
-    return !Boolean(this._mkeyMask[code]);
-};
-InputFlag.prototype._getMask = function _getMask (code) {
-    return !Boolean(this._keyMask[code]);
-};
-InputFlag.prototype.hideMState = function hideMState (code) {
-    this._mkeyMask[code] = true;
-};
-InputFlag.prototype.hideState = function hideState (code) {
-    this._keyMask[code] = true;
-};
-InputFlag.prototype.isMKeyPressed = function isMKeyPressed (code) {
-    return this._getMMask(code) && (this._mkey[code] === 1);
-};
-InputFlag.prototype.isMKeyPressing = function isMKeyPressing (code) {
-    return this._getMMask(code) && (this._mkey[code] >= 1);
-};
-InputFlag.prototype.isMKeyClicked = function isMKeyClicked (code) {
-    return this._getMMask(code) && (this._mkey[code] === -1);
-};
-InputFlag.prototype.isKeyPressed = function isKeyPressed (code) {
-    return this._getMask(code) && (this._key[code] === 1);
-};
-InputFlag.prototype.isKeyPressing = function isKeyPressing (code) {
-    return this._getMask(code) && (this._key[code] >= 1);
-};
-InputFlag.prototype.isKeyClicked = function isKeyClicked (code) {
-    return this._getMask(code) && (this._key[code] === -1);
-};
-InputFlag.prototype.position = function position () {
-    return this._pos;
-};
-InputFlag.prototype.doubleClicked = function doubleClicked () {
-    return this._dblClick;
-};
-InputFlag.prototype.wheelDelta = function wheelDelta () {
-    return this._wheelDelta;
-};
-InputFlag.prototype.positionDelta = function positionDelta () {
-    return this._positionDelta;
-};
-
-var InputMgr = (function (RefCount$$1) {
-    function InputMgr() {
-        var this$1 = this;
-
-        RefCount$$1.call(this);
-        this._cur = new InputBuff();
-        this._prev = new InputBuff();
-        this._switchBuff();
-        this._flag = new InputFlag();
-        this._events = {
-            mousedown: function (e) {
-                this$1._cur.mkey[e.button] = true;
-            },
-            mouseup: function (e) {
-                this$1._cur.mkey[e.button] = false;
-            },
-            mousemove: function (e) {
-                this$1._cur.pos = new Vec2(e.pageX, e.pageY);
-            },
-            keydown: function (e) {
-                this$1._cur.key[e.keyCode] = true;
-            },
-            keyup: function (e) {
-                this$1._cur.key[e.keyCode] = false;
-            },
-            wheel: function (e) {
-                this$1._cur.wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
-            },
-            dblclick: function (e) {
-                this$1._cur.dblClick = 0x01;
-            },
-            touchstart: function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                var me = e.changedTouches[0];
-                var p = new Vec2(me.pageX, me.pageY);
-                this$1._prev.pos = this$1._cur.pos = p;
-                this$1._cur.mkey[0] = true;
-                return false;
-            },
-            touchmove: function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                var me = e.changedTouches[0];
-                this$1._cur.pos = new Vec2(me.pageX, me.pageY);
-                return false;
-            },
-            touchend: function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                this$1._cur.mkey[0] = false;
-                return false;
-            },
-            touchcancel: function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                this$1._cur.mkey[0] = false;
-                return false;
-            }
-        };
-        this._registerEvent();
-    }
-
-    if ( RefCount$$1 ) InputMgr.__proto__ = RefCount$$1;
-    InputMgr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
-    InputMgr.prototype.constructor = InputMgr;
-    InputMgr.prototype.lockPointer = function lockPointer (elem) {
-        var api = [
-            "requestPointerLock",
-            "webkitRequestPointerLock",
-            "mozRequestPointerLock"
-        ];
-        var len = api.length;
-        for (var i = 0; i < len; i++) {
-            if (elem[api[i]]) {
-                elem[api[i]]();
-                return;
-            }
-        }
-        Assert(false, "pointer lock API not found");
-    };
-    InputMgr.prototype.unlockPointer = function unlockPointer () {
-        var api = [
-            "exitPointerLock",
-            "webkitExitPointerLock",
-            "mozExitPointerLock"
-        ];
-        var len = api.length;
-        for (var i = 0; i < len; i++) {
-            if (document[api[i]]) {
-                document[api[i]]();
-                return;
-            }
-        }
-        Assert(false, "pointer lock API not found");
-    };
-    InputMgr.prototype._registerEvent = function _registerEvent () {
-        var this$1 = this;
-
-        var param = { capture: true, passive: false };
-        for (var k in this$1._events) {
-            document.addEventListener(k, this$1._events[k], param);
-        }
-    };
-    InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
-        var this$1 = this;
-
-        for (var k in this$1._events) {
-            document.removeEventListener(k, this$1._events[k]);
-        }
-    };
-    InputMgr.prototype._switchBuff = function _switchBuff () {
-        this._prev = this._cur;
-        this._cur = new InputBuff();
-    };
-    InputMgr.prototype.update = function update () {
-        this._flag.update(this._cur);
-        this._switchBuff();
-    };
-    InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) {
-        return this._flag.isMKeyPressed(code);
-    };
-    InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) {
-        return this._flag.isMKeyPressing(code);
-    };
-    InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) {
-        return this._flag.isMKeyClicked(code);
-    };
-    InputMgr.prototype.hideMState = function hideMState (code) {
-        this._flag.hideMState(code);
-    };
-    InputMgr.prototype.isKeyPressed = function isKeyPressed (code) {
-        return this._flag.isKeyPressed(code);
-    };
-    InputMgr.prototype.isKeyPressing = function isKeyPressing (code) {
-        return this._flag.isKeyPressing(code);
-    };
-    InputMgr.prototype.isKeyClicked = function isKeyClicked (code) {
-        return this._flag.isKeyClicked(code);
-    };
-    InputMgr.prototype.hideState = function hideState (code) {
-        this._flag.hideState(code);
-    };
-    InputMgr.prototype.positionDelta = function positionDelta () {
-        return this._flag.positionDelta();
-    };
-    InputMgr.prototype.position = function position () {
-        return this._flag.position();
-    };
-    InputMgr.prototype.doubleClicked = function doubleClicked () {
-        return this._flag.doubleClicked();
-    };
-    InputMgr.prototype.wheelDelta = function wheelDelta () {
-        return this._flag.wheelDelta();
-    };
-    // ---------------- from GLResourceBase ----------------
-    InputMgr.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        RefCount$$1.prototype.discard.call(this, function () {
-            if (cb)
-                { cb(); }
-            this$1._unregisterEvent();
-        });
-    };
-
-    return InputMgr;
-}(RefCount));
-
-var GObject = (function (BaseObject$$1) {
-    function GObject(priority) {
-        if ( priority === void 0 ) priority = 0;
-
-        BaseObject$$1.call(this);
-        this.priority = priority;
-    }
-
-    if ( BaseObject$$1 ) GObject.__proto__ = BaseObject$$1;
-    GObject.prototype = Object.create( BaseObject$$1 && BaseObject$$1.prototype );
-    GObject.prototype.constructor = GObject;
-    GObject.prototype.onUpdate = function onUpdate (dt) {
-        return this.alive();
-    };
-    GObject.prototype.onDown = function onDown (ret) { };
-    GObject.prototype.onUp = function onUp () { };
-    GObject.prototype.onConnected = function onConnected (g) { };
-
-    return GObject;
-}(BaseObject));
-
-var FSMachine = (function (GObject$$1) {
-    function FSMachine(p, state) {
-        GObject$$1.call(this, p);
-        this._state = state;
-        this._nextState = null;
-        state.onEnter(this, BeginState);
-    }
-
-    if ( GObject$$1 ) FSMachine.__proto__ = GObject$$1;
-    FSMachine.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-    FSMachine.prototype.constructor = FSMachine;
-    FSMachine.prototype._doSwitchState = function _doSwitchState () {
-        var this$1 = this;
-
-        for (;;) {
-            var ns = this$1._nextState;
-            if (!ns)
-                { break; }
-            this$1._nextState = null;
-            var old = this$1._state;
-            old.onExit(this$1, ns);
-            this$1._state = ns;
-            ns.onEnter(this$1, old);
-        }
-    };
-    FSMachine.prototype.setState = function setState (st) {
-        Assert(!this._nextState);
-        this._nextState = st;
-    };
-    FSMachine.prototype.onUpdate = function onUpdate (dt) {
-        if (this.alive()) {
-            this._state.onUpdate(this, dt);
-            this._doSwitchState();
-        }
-        return this.alive();
-    };
-    FSMachine.prototype.onDown = function onDown (ret) {
-        this._state.onDown(this, ret);
-    };
-    FSMachine.prototype.onUp = function onUp () {
-        this._state.onUp(this);
-    };
-    // --------------- from BaseObject ---------------
-    FSMachine.prototype.destroy = function destroy () {
-        if (GObject$$1.prototype.destroy.call(this)) {
-            this.setState(EndState);
-            this._doSwitchState();
-            return true;
-        }
-        return false;
-    };
-
-    return FSMachine;
-}(GObject));
-
-var Group = (function (RefCount$$1) {
-    function Group() {
-        RefCount$$1.apply(this, arguments);
-        this._group = [];
-        this._add = null;
-        this._remove = null;
-    }
-
-    if ( RefCount$$1 ) Group.__proto__ = RefCount$$1;
-    Group.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
-    Group.prototype.constructor = Group;
-    Group.prototype.group = function group () { return this._group; };
-    Group.prototype._doAdd = function _doAdd (cbAdd) {
-        var this$1 = this;
-
-        var addL = this._add;
-        if (addL) {
-            addL.forEach(function (obj) {
-                cbAdd(obj, this$1);
-                this$1._group.push(obj);
-            });
-            this._add = null;
-            return true;
-        }
-        return false;
-    };
-    Group.prototype._removeSingle = function _removeSingle (obj) {
-        // 線形探索
-        var g = this._group;
-        var len = g.length;
-        for (var i = 0; i < len; i++) {
-            if (g[i] === obj) {
-                g[i].discard();
-                g.splice(i, 1);
-            }
-        }
-    };
-    Group.prototype._doRemove = function _doRemove () {
-        var this$1 = this;
-
-        var remL = this._remove;
-        if (remL) {
-            var len = remL.length;
-            for (var i = 0; i < len; i++)
-                { this$1._removeSingle(remL[i]); }
-            this._remove = null;
-            return true;
-        }
-        return false;
-    };
-    Group.prototype._sort = function _sort (cbSort) {
-        this._group.sort(cbSort);
-    };
-    Group.prototype.doAddRemove = function doAddRemove (cbAdd) {
-        return this._doAdd(cbAdd) || this._doRemove();
-    };
-    Group.prototype.proc = function proc (cbAdd, cbSort, bRefr) {
-        if (this.doAddRemove(cbAdd) || bRefr) {
-            if (cbSort)
-                { this._sort(cbSort); }
-        }
-    };
-    Group.prototype.add = function add (obj) {
-        if (!this._add)
-            { this._add = []; }
-        obj.acquire();
-        this._add.push(obj);
-    };
-    Group.prototype.remove = function remove (obj) {
-        if (!this._remove)
-            { this._remove = []; }
-        this._remove.push(obj);
-    };
-    Group.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        RefCount$$1.prototype.discard.call(this, function () {
-            if (cb)
-                { cb(); }
-            var g = this$1._group;
-            for (var i = 0; i < g.length; i++) {
-                g[i].discard();
-            }
-            this$1._group = [];
-            var a = this$1._add;
-            if (a) {
-                for (var i$1 = 0; i$1 < a.length; i$1++) {
-                    a[i$1].discard();
-                }
-                this$1._add = null;
-            }
-            this$1._remove = null;
-        });
-    };
-
-    return Group;
-}(RefCount));
-
-var UpdGroup = (function (GObject$$1) {
-    function UpdGroup(p) {
-        GObject$$1.call(this, p);
-        this.group = new Group();
-    }
-
-    if ( GObject$$1 ) UpdGroup.__proto__ = GObject$$1;
-    UpdGroup.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-    UpdGroup.prototype.constructor = UpdGroup;
-    UpdGroup.prototype._doAddRemove = function _doAddRemove () {
-        var cbAdd = function (obj, g) {
-            obj.onConnected(g);
-        };
-        var cbSort = function (a, b) {
-            if (a.priority > b.priority)
-                { return 1; }
-            else if (a.priority === b.priority)
-                { return 0; }
-            return -1;
-        };
-        this.group.proc(cbAdd, cbSort);
-    };
-    UpdGroup.prototype.onUpdate = function onUpdate (dt) {
-        var this$1 = this;
-
-        this._doAddRemove();
-        var g = this.group.group();
-        for (var i = 0; i < g.length; i++) {
-            if (!g[i].onUpdate(dt))
-                { this$1.group.remove(g[i]); }
-        }
-        this._doAddRemove();
-        return true;
-    };
-    // ------------ from GObject ------------
-    UpdGroup.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        GObject$$1.prototype.discard.call(this, function () {
-            if (cb)
-                { cb(); }
-            this$1.group.discard();
-        });
-    };
-
-    return UpdGroup;
-}(GObject));
-
-var DrawGroup = (function (DObject$$1) {
-    function DrawGroup() {
-        DObject$$1.call(this, null);
-        this.group = new Group();
-        this._bRefr = true;
-    }
-
-    if ( DObject$$1 ) DrawGroup.__proto__ = DObject$$1;
-    DrawGroup.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    DrawGroup.prototype.constructor = DrawGroup;
-    DrawGroup.prototype.setSortAlgorithm = function setSortAlgorithm (a) {
-        this._sortAlg = a;
-        this._bRefr = true;
-    };
-    DrawGroup.prototype._proc = function _proc () {
-        var this$1 = this;
-
-        var cbAdd = function (obj, g) { };
-        var cbSort;
-        if (this._sortAlg) {
-            cbSort = function (a, b) {
-                return this$1._sortAlg(a.drawtag, b.drawtag);
-            };
-        }
-        this.group.proc(cbAdd, cbSort, this._bRefr);
-        this._bRefr = false;
-    };
-    DrawGroup.prototype.onDraw = function onDraw () {
-        this._proc();
-        var g = this.group.group();
-        for (var i = 0; i < g.length; i++) {
-            var obj = g[i];
-            engine.applyTag(obj.drawtag);
-            obj.onDraw();
-        }
-        this._proc();
-    };
-    DrawGroup.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        DObject$$1.prototype.discard.call(this, function () {
-            if (cb)
-                { cb(); }
-            this$1.group.discard();
-        });
-    };
-
-    return DrawGroup;
-}(DObject));
-
-var SharedPtr = (function (RefCount$$1) {
-    function SharedPtr(target) {
-        RefCount$$1.call(this);
-        this.set(target);
-    }
-
-    if ( RefCount$$1 ) SharedPtr.__proto__ = RefCount$$1;
-    SharedPtr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
-    SharedPtr.prototype.constructor = SharedPtr;
-    SharedPtr.prototype.set = function set (t) {
-        if (this._target)
-            { this._target.discard(); }
-        if (t)
-            { t.acquire(); }
-        this._target = t;
-    };
-    SharedPtr.prototype.get = function get () {
-        return this._target;
-    };
-    SharedPtr.prototype.reset = function reset () {
-        this.set();
-    };
-    // -------- from RefCount --------
-    SharedPtr.prototype.discard = function discard () {
-        var this$1 = this;
-
-        RefCount$$1.prototype.discard.call(this, function () {
-            if (this$1._target)
-                { this$1._target.discard(); }
-            this$1._target = undefined;
-        });
-    };
-
-    return SharedPtr;
-}(RefCount));
-
-var Scene = (function (FSMachine$$1) {
-    function Scene() {
-        FSMachine$$1.apply(this, arguments);
-        this.updateTarget = new SharedPtr(new UpdGroup(0));
-        this.drawTarget = new SharedPtr(new DrawGroup());
-    }
-
-    if ( FSMachine$$1 ) Scene.__proto__ = FSMachine$$1;
-    Scene.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
-    Scene.prototype.constructor = Scene;
-    Scene.prototype.asUpdateGroup = function asUpdateGroup () {
-        Assert(this.updateTarget.get() instanceof UpdGroup);
-        return this.updateTarget.get();
-    };
-    Scene.prototype.asDrawGroup = function asDrawGroup () {
-        Assert(this.drawTarget.get() instanceof DrawGroup);
-        return this.drawTarget.get();
-    };
-    Scene.prototype.onUpdate = function onUpdate (dt) {
-        FSMachine$$1.prototype.onUpdate.call(this, dt);
-        this.updateTarget.get().onUpdate(dt);
-        return true;
-    };
-    Scene.prototype.onDraw = function onDraw () {
-        this.drawTarget.get().onDraw();
-    };
-    // ----------------- from Drawable|Updatable -----------------
-    Scene.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        FSMachine$$1.prototype.discard.call(this, function () {
-            if (cb)
-                { cb(); }
-            this$1.updateTarget.discard();
-            this$1.drawTarget.discard();
-        });
-    };
-
-    return Scene;
-}(FSMachine));
-
-function OutputError(where, msg) {
-    console.log(("Error in " + where + ": " + msg));
-}
-
-var SceneMgrState;
-(function (SceneMgrState) {
-    SceneMgrState[SceneMgrState["Idle"] = 0] = "Idle";
-    SceneMgrState[SceneMgrState["Draw"] = 1] = "Draw";
-    SceneMgrState[SceneMgrState["Proc"] = 2] = "Proc";
-})(SceneMgrState || (SceneMgrState = {}));
-var SceneMgr = (function (GObject$$1) {
-    function SceneMgr(firstScene) {
-        GObject$$1.call(this);
-        this._scene = [];
-        this._nextScene = null;
-        this._nPop = 0;
-        this._state = SceneMgrState.Idle;
-        this._bSwitch = false;
-        firstScene.acquire();
-        this.push(firstScene, false);
-        firstScene.onUp();
-        this._proceed();
-    }
-
-    if ( GObject$$1 ) SceneMgr.__proto__ = GObject$$1;
-    SceneMgr.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
-    SceneMgr.prototype.constructor = SceneMgr;
-    SceneMgr.prototype.push = function push (scene, bPop) {
-        Assert(scene instanceof Scene);
-        // 描画メソッドでのシーン変更は禁止
-        Assert(this._state !== SceneMgrState.Draw);
-        // 一度に2つ以上のシーンを積むのは禁止
-        Assert(!this._nextScene);
-        // popした後に積むのも禁止
-        Assert(this._nPop === 0);
-        scene.acquire();
-        this._nextScene = scene;
-        this._bSwitch = bPop;
-        this._nPop = bPop ? 1 : 0;
-    };
-    SceneMgr.prototype.pop = function pop (n, ret) {
-        if ( n === void 0 ) n = 1;
-
-        // 描画メソッドでのシーン変更は禁止
-        Assert(this._state !== SceneMgrState.Draw);
-        // pushした後にpopはNG
-        Assert(!this._nextScene);
-        Assert(this._nPop === 0);
-        this._bSwitch = false;
-        this._nPop = n;
-        this._return = ret;
-    };
-    SceneMgr.prototype._proceed = function _proceed () {
-        var this$1 = this;
-
-        Assert(this._state === SceneMgrState.Idle);
-        this._state = SceneMgrState.Proc;
-        var b = false;
-        while (this._nPop > 0) {
-            --this$1._nPop;
-            b = true;
-            this$1._scene.pop().discard();
-            if (this$1._scene.length === 0) {
-                this$1._nPop = 0;
-                break;
-            }
-            if (!this$1._bSwitch)
-                { this$1.top().onDown(this$1._return); }
-            delete this$1._return;
-        }
-        var ns = this._nextScene;
-        if (ns) {
-            this._nextScene = null;
-            this._scene.push(ns);
-            ns.onUp();
-            b = true;
-        }
-        this._state = SceneMgrState.Idle;
-        return b;
-    };
-    SceneMgr.prototype.top = function top () {
-        return this._scene[this._scene.length - 1];
-    };
-    SceneMgr.prototype.length = function length () {
-        return this._scene.length;
-    };
-    SceneMgr.prototype.prev = function prev () {
-        var s = this._scene;
-        if (s.length < 2)
-            { return null; }
-        return s[s.length - 2];
-    };
-    SceneMgr.prototype._empty = function _empty () {
-        return this.length() === 0;
-    };
-    SceneMgr.prototype.onUpdate = function onUpdate (dt) {
-        var this$1 = this;
-
-        for (;;) {
-            if (this$1._empty())
-                { return false; }
-            try {
-                this$1.top().onUpdate(dt);
-            }
-            catch (e) {
-                OutputError("scenemgr::onupdate()", e.message);
-            }
-            if (!this$1._proceed())
-                { break; }
-        }
-        return !this._empty();
-    };
-    SceneMgr.prototype.onDraw = function onDraw () {
-        Assert(this._state === SceneMgrState.Idle);
-        this._state = SceneMgrState.Draw;
-        try {
-            this.top().onDraw();
-        }
-        catch (e) {
-            OutputError("scenemgr::ondraw()", e.message);
-        }
-        this._state = SceneMgrState.Idle;
-    };
-    // -------------- from GObject --------------
-    SceneMgr.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        GObject$$1.prototype.discard.call(this, function () {
-            if (this$1._nextScene)
-                { this$1._nextScene.discard(); }
-            var s = this$1._scene;
-            for (var i = 0; i < s.length; i++)
-                { s[i].discard(); }
-            this$1._scene = [];
-        });
-    };
-
-    return SceneMgr;
-}(GObject));
-
-var Loop = function Loop() {
-    this._timerId = null;
-    this._targetFps = 60;
-    this._reset();
-};
-Loop.prototype._reset = function _reset (now) {
-        if ( now === void 0 ) now = new Date().getTime();
-
-    if (this._timerId) {
-        clearTimeout(this._timerId);
-        this._timerId = null;
-    }
-    this._beginTime = now;
-    this._prevTime = now;
-    this._accum = 0;
-};
-Loop.prototype.running = function running () {
-    return this._timerId !== null;
-};
-Loop.prototype.targetFps = function targetFps () {
-    return this._targetFps;
-};
-Loop.prototype.accum = function accum () {
-    return this._accum;
-};
-Loop._CalcFPSArray = function _CalcFPSArray (fps) {
-    var gcd = TM$1.GCD(1000, fps);
-    var div0 = 1000 / gcd, div1 = fps / gcd;
-    var df = Math.floor(div0 / div1);
-    var tmp = [];
-    for (var i = 0; i < div1; i++) {
-        tmp.push(df);
-    }
-    var dc = df * div1;
-    for (var i$1 = 0; i$1 < (div0 - dc); i$1++)
-        { ++tmp[i$1]; }
-    return tmp;
-};
-Loop.prototype.start = function start (targetFps, cb) {
-    this.stop();
-    this._targetFps = targetFps;
-    this._reset();
-    var fps_array = Loop._CalcFPSArray(targetFps);
-    var fps_ptr = 0;
-    var self = this;
-    (function Tmp() {
-        self._timerId = setTimeout(Tmp, fps_array[fps_ptr]);
-        fps_ptr = (++fps_ptr) % fps_array.length;
-        ++self._accum;
-        var now = new Date().getTime();
-        cb((now - self._prevTime) / 1000);
-        self._prevTime = now;
-    })();
-};
-Loop.prototype.stop = function stop () {
-    this._reset();
-};
-
-var GLResourceSet = (function (GLResourceBase$$1) {
-    function GLResourceSet() {
-        GLResourceBase$$1.apply(this, arguments);
-        this._set = new Set();
-    }
-
-    if ( GLResourceBase$$1 ) GLResourceSet.__proto__ = GLResourceBase$$1;
-    GLResourceSet.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
-    GLResourceSet.prototype.constructor = GLResourceSet;
-    GLResourceSet.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
-            this$1._set.forEach(function (r) {
-                r.onContextLost();
-            });
-        });
-    };
-    GLResourceSet.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
-            this$1._set.forEach(function (r) {
-                r.onContextRestored();
-            });
-        });
-    };
-    GLResourceSet.prototype.add = function add (r) {
-        this._set.add(r);
-        if (!gl.isContextLost())
-            { r.onContextRestored(); }
-    };
-    GLResourceSet.prototype.remove = function remove (r) {
-        this._set.delete(r);
-    };
-
-    return GLResourceSet;
-}(GLResourceBase));
-
-var Alias = { "common": "fragile/resource/common.glsl", "gauss": "fragile/resource/gauss.def", "gaussH_FS": "fragile/resource/gaussH_FS.fsh", "gaussV_FS": "fragile/resource/gaussV_FS.fsh", "gauss_mix9": "fragile/resource/gauss_mix9.glsl", "gaussh": "fragile/resource/gaussh.vsh", "gaussv": "fragile/resource/gaussv.vsh", "gaussvalue": "fragile/resource/gaussvalue.glsl", "prog": "fragile/resource/prog.prog", "rectf": "fragile/resource/rectf.fsh", "rectv": "fragile/resource/rectv.vsh", "rectvalue": "fragile/resource/rectvalue.glsl", "testf": "fragile/resource/testf.fsh", "testv": "fragile/resource/testv.vsh", "textf": "fragile/resource/textf.fsh", "textv": "fragile/resource/textv.vsh", "textvalue": "fragile/resource/textvalue.glsl", "uv9": "fragile/resource/uv9.glsl" };
-
-function _MainLoop(base, cbAlias, cbMakeScene) {
-    SetResource(new ResStack(base));
-    cbAlias();
-    SetEngine(new Engine());
-    SetInput(new InputMgr());
-    SetScene(new SceneMgr(cbMakeScene()));
-    SetGLRes(new GLResourceSet());
-    glres.onContextRestored();
-}
-function MainLoop(alias, base, cbMakeScene) {
-    _MainLoop(base, function () {
-        resource.addAlias(Alias);
-        resource.addAlias(alias);
-    }, cbMakeScene);
-    RequestAnimationFrame(function Loop$$1() {
-        RequestAnimationFrame(Loop$$1);
-        if (gl.isContextLost())
-            { return; }
-        scene.onDraw();
-    });
-    var loop = new Loop();
-    loop.start(60, function (tick) {
-        // 最大50msまでの経過時間
-        tick = Math.min(50, tick);
-        input.update();
-        if (!scene.onUpdate(tick)) {
-            loop.stop();
-        }
-    });
-}
-
-var LoadFailed = (function (Error) {
-    function LoadFailed(msg) {
-        Error.call(this, msg);
-    }
-
-    if ( Error ) LoadFailed.__proto__ = Error;
-    LoadFailed.prototype = Object.create( Error && Error.prototype );
-    LoadFailed.prototype.constructor = LoadFailed;
-
-    return LoadFailed;
-}(Error));
-var St = (function (State$$1) {
-    function St () {
-        State$$1.apply(this, arguments);
-    }if ( State$$1 ) St.__proto__ = State$$1;
-    St.prototype = Object.create( State$$1 && State$$1.prototype );
-    St.prototype.constructor = St;
-
-    
-
-    return St;
-}(State));
-var LoadingScene = (function (Scene$$1) {
-    function LoadingScene(res, nextScene, cbProgress, cbTaskProgress) {
-        Scene$$1.call(this, 0, new St());
-        resource.loadFrame(res, {
-            completed: function () {
-                scene.push(nextScene(), true);
-            },
-            error: function (msg) {
-                scene.pop(1, new LoadFailed(msg));
-            },
-            progress: cbProgress || function () { },
-            taskprogress: cbTaskProgress || function () { }
-        });
-    }
-
-    if ( Scene$$1 ) LoadingScene.__proto__ = Scene$$1;
-    LoadingScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
-    LoadingScene.prototype.constructor = LoadingScene;
-
-    return LoadingScene;
-}(Scene));
-
-var StIdle = (function (State$$1) {
-    function StIdle () {
-        State$$1.apply(this, arguments);
-    }
-
-    if ( State$$1 ) StIdle.__proto__ = State$$1;
-    StIdle.prototype = Object.create( State$$1 && State$$1.prototype );
-    StIdle.prototype.constructor = StIdle;
-
-    StIdle.prototype.onUpdate = function onUpdate (self, dt) {
-        if (input.isMKeyPressed(0)) {
-            self.setState(new StLook());
-        }
-        else {
-            var c = self.camera;
-            var dx = 0, dy = 0;
-            // A = 65
-            if (input.isKeyPressing(65)) {
-                dx = -1;
-                // D = 68
-            }
-            else if (input.isKeyPressing(68)) {
-                dx = 1;
-            }
-            // W = 87
-            if (input.isKeyPressing(87)) {
-                dy = 1;
-                // S = 83
-            }
-            else if (input.isKeyPressing(83)) {
-                dy = -1;
-            }
-            var r = c.rot.right();
-            c.pos.addSelf(r.mul(dx * dt * self._speed));
-            var u = c.rot.dir();
-            c.pos.addSelf(u.mul(dy * dt * self._speed));
-        }
-    };
-
-    return StIdle;
-}(State));
-var StLook = (function (State$$1) {
-    function StLook () {
-        State$$1.apply(this, arguments);
-    }
-
-    if ( State$$1 ) StLook.__proto__ = State$$1;
-    StLook.prototype = Object.create( State$$1 && State$$1.prototype );
-    StLook.prototype.constructor = StLook;
-
-    StLook.prototype.onUpdate = function onUpdate (self, dt) {
-        if (!input.isMKeyPressing(0)) {
-            self.setState(new StIdle());
-        }
-        else {
-            var d = input.positionDelta();
-            self._yaw += d.x * self._rotSpeed;
-            self._pitch -= d.y * self._rotSpeed;
-            var pi = Math.PI;
-            self._pitch = Saturation(self._pitch, -(pi / 2 - 0.01), (pi / 2 - 0.01));
-            var c = self.camera;
-            c.rot = Quat.RotationYPR(self._yaw, self._pitch, 0);
-            c.rot.normalizeSelf();
-        }
-    };
-
-    return StLook;
-}(State));
-var FPSCamera = (function (FSMachine$$1) {
-    function FPSCamera() {
-        FSMachine$$1.call(this, 0, new StIdle());
-        this._yaw = this._pitch = 0;
-        this._speed = 3;
-        this._rotSpeed = 0.003;
-        var c = new Camera3D();
-        c.fov = TM$1.Deg2rad(90);
-        var s = engine.size();
-        c.aspect = s.width / s.height;
-        c.nearZ = 0.01;
-        c.farZ = 200;
-        c.pos = new Vec3(0, 0, -1);
-        this.camera = c;
-    }
-
-    if ( FSMachine$$1 ) FPSCamera.__proto__ = FSMachine$$1;
-    FPSCamera.prototype = Object.create( FSMachine$$1 && FSMachine$$1.prototype );
-    FPSCamera.prototype.constructor = FPSCamera;
-
-    return FPSCamera;
-}(FSMachine));
-
-var GLBufferInfo = function GLBufferInfo(usage, typeinfo, 
-    // 頂点の個数
-    nElem, 
-    // 要素何個分で頂点一つ分か
-    dim, 
-    // バックアップ用のデータ
-    backup) {
-    this.usage = usage;
-    this.typeinfo = typeinfo;
-    this.nElem = nElem;
-    this.dim = dim;
-    this.backup = backup;
-};
-var GLBuffer = (function (GLResourceBase$$1) {
-    function GLBuffer() {
-        GLResourceBase$$1.call(this);
-        this._id = null;
-        this._bBind = false;
-        glres.add(this);
-    }
-
-    if ( GLResourceBase$$1 ) GLBuffer.__proto__ = GLResourceBase$$1;
-    GLBuffer.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
-    GLBuffer.prototype.constructor = GLBuffer;
-    GLBuffer.prototype.id = function id () {
-        return this._id;
-    };
-    GLBuffer.prototype.usage = function usage () {
-        return this._info.usage;
-    };
-    GLBuffer.prototype.typeinfo = function typeinfo () {
-        return this._info.typeinfo;
-    };
-    GLBuffer.prototype.nElem = function nElem () {
-        return this._info.nElem;
-    };
-    GLBuffer.prototype.dim = function dim () {
-        return this._info.dim;
-    };
-    GLBuffer.prototype._typeId = function _typeId () {
-        return GLConst.BufferTypeC.convert(this.typeId());
-    };
-    GLBuffer.prototype._typeQueryId = function _typeQueryId () {
-        return GLConst.BufferQueryC.convert(this.typeQueryId());
-    };
-    GLBuffer.prototype._usage = function _usage () {
-        return GLConst.DrawTypeC.convert(this.usage());
-    };
-    GLBuffer.prototype.allocate = function allocate (fmt, nElem, dim, usage, bRestore) {
-        var this$1 = this;
-
-        var t = GLConst.GLTypeInfo[GLConst.DataFormatC.convert(fmt)];
-        Assert(Boolean(t));
-        var bytelen = nElem * dim * t.bytesize;
-        this._info = new GLBufferInfo(usage, t, nElem, dim, bRestore ? new ArrayBuffer(bytelen) : undefined);
-        this.proc(function () {
-            gl.bufferData(this$1._typeId(), bytelen, this$1._usage());
-        });
-    };
-    GLBuffer.prototype._setData = function _setData (data, info, nElem, dim, usage, bRestore) {
-        var this$1 = this;
-
-        var restoreData;
-        if (bRestore) {
-            restoreData = data.slice(0);
-        }
-        this._info = new GLBufferInfo(usage, info, nElem, dim, restoreData);
-        this.proc(function () {
-            gl.bufferData(this$1._typeId(), data, this$1._usage());
-        });
-    };
-    GLBuffer.prototype.setData = function setData (data, dim, usage, bRestore) {
-        var t = GLConst.Type2GLType[data.constructor.name];
-        this._setData(data.buffer, t, data.length / dim, dim, usage, bRestore);
-    };
-    GLBuffer.prototype.setVectorData = function setVectorData (data, usage, bRestore) {
-        this.setData(VectorToArray.apply(void 0, data), data[0].dim(), usage, bRestore);
-    };
-    GLBuffer.prototype.setSubData = function setSubData (offset_elem, data) {
-        var this$1 = this;
-
-        var info = this._info;
-        var ofs = info.typeinfo.bytesize * offset_elem;
-        if (info.backup) {
-            var dst = new Uint8Array(info.backup);
-            var src = new Uint8Array(data);
-            for (var i = 0; i < data.byteLength; i++)
-                { dst[ofs + i] = src[i]; }
-        }
-        this.proc(function () {
-            gl.bufferSubData(this$1._typeId(), ofs, data);
-        });
-    };
-    // --------- from Bindable ---------
-    GLBuffer.prototype.bind = function bind () {
-        Assert(this.count() > 0, "already discarded");
-        Assert(!this._bBind, "already binded");
-        gl.bindBuffer(this._typeId(), this.id());
-        this._bBind = true;
-    };
-    GLBuffer.prototype.unbind = function unbind (id) {
-        if ( id === void 0 ) id = null;
-
-        Assert(this._bBind, "not binded yet");
-        gl.bindBuffer(this._typeId(), id);
-        this._bBind = false;
-    };
-    GLBuffer.prototype.proc = function proc (cb) {
-        if (this.contextLost())
-            { return; }
-        var prev = gl.getParameter(this._typeQueryId());
-        this.bind();
-        cb();
-        this.unbind(prev);
-    };
-    // --------- from GLResourceBase ---------
-    GLBuffer.prototype.discard = function discard (cb) {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.discard.call(this, function () {
-            Assert(!this$1._bBind, "still binding somewhere");
-            if (cb)
-                { cb(); }
-            this$1.onContextLost();
-            glres.remove(this$1);
-        });
-    };
-    // --------- from GLContext ---------
-    GLBuffer.prototype.onContextLost = function onContextLost () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
-            gl.deleteBuffer(this$1.id());
-            this$1._id = null;
-        });
-    };
-    GLBuffer.prototype.onContextRestored = function onContextRestored () {
-        var this$1 = this;
-
-        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
-            this$1._id = gl.createBuffer();
-            if (this$1._info) {
-                // 必要ならデータを復元
-                var bd = this$1._info.backup;
-                if (bd) {
-                    this$1._setData(bd, this$1.typeinfo(), this$1.nElem(), this$1.dim(), this$1.usage(), true);
-                }
-            }
-        });
-    };
-
-    return GLBuffer;
-}(GLResourceBase));
-
-var GLVBuffer = (function (GLBuffer$$1) {
-    function GLVBuffer () {
-        GLBuffer$$1.apply(this, arguments);
-    }
-
-    if ( GLBuffer$$1 ) GLVBuffer.__proto__ = GLBuffer$$1;
-    GLVBuffer.prototype = Object.create( GLBuffer$$1 && GLBuffer$$1.prototype );
-    GLVBuffer.prototype.constructor = GLVBuffer;
-
-    GLVBuffer.prototype.typeId = function typeId () {
-        return BufferType.Vertex;
-    };
-    GLVBuffer.prototype.typeQueryId = function typeQueryId () {
-        return BufferQuery.Vertex;
-    };
-
-    return GLVBuffer;
-}(GLBuffer));
-
-function Rand01() {
-    return (Math.random() - 0.5) * 2;
-}
-var Points = function Points() {
-    this.position = [];
-    this.hsv = [];
-};
-var Alg = function Alg(n) {
-    this._nP = n;
-    this._veloc = [];
-};
-Alg.prototype.initialize = function initialize () {
-    var ret = new Points();
-    var vpos = ret.position;
-    var vhsv = ret.hsv;
-    var veloc = this._veloc;
-    for (var i = 0; i < this._nP; i++) {
-        vpos[i] = new Vec3(Rand01(), -1, Rand01());
-        veloc[i] = new Vec3(Rand01(), 0.1, Rand01()).normalizeSelf();
-        vhsv[i] = new Vec3(Math.random(), 0.8, 1);
-    }
-    return ret;
-};
-Alg.prototype.advance = function advance (points, dt) {
-    var veloc = this._veloc;
-    var len = veloc.length;
-    for (var i = 0; i < len; i++) {
-        points.position[i].addSelf(veloc[i].mul(dt));
-        var dir = points.position[i].minus();
-        dir.mulSelf(dt);
-        veloc[i] = veloc[i].add(dir).normalize();
-    }
-};
-var PSprite = function PSprite(alg) {
-    this._alg = alg;
-    this._points = alg.initialize();
-    var vbc = new GLVBuffer();
-    vbc.setVectorData(this._points.hsv, DrawType.Dynamic, true);
-    var vb = new GLVBuffer();
-    vb.setVectorData(this._points.position, DrawType.Dynamic, true);
-    this._geom = {
-        vbuffer: {
-            a_position: vb,
-            a_hsv: vbc
-        },
-        type: Primitive.Points
-    };
-    this.hueOffset = 0;
-};
-PSprite.prototype.advance = function advance (dt) {
-    this._alg.advance(this._points, dt);
-    var vr = VectorToArray.apply(void 0, this._points.position);
-    this._geom.vbuffer.a_position.setSubData(0, vr.buffer);
-    var vsv = VectorToArray.apply(void 0, this._points.hsv);
-    this._geom.vbuffer.a_hsv.setSubData(0, vsv.buffer);
-};
-PSprite.prototype.draw = function draw (alpha) {
-    if (this.texture)
-        { engine.setUniform("u_texture", this.texture); }
-    engine.sys3d().worldMatrix = Mat44.Identity();
-    engine.setUniform("u_alpha", alpha);
-    engine.setUniform("u_hue", this.hueOffset);
-    engine.drawGeometry(this._geom);
-};
-var PSpriteDraw = (function (DObject$$1) {
-    function PSpriteDraw(n) {
-        DObject$$1.call(this, "psprite");
-        this._psprite = new PSprite(new Alg(n));
-        var tex = resource.getResource("sphere");
-        tex.setLinear(true, true, 0);
-        this._psprite.texture = tex;
-        this.alpha = 1;
-    }
-
-    if ( DObject$$1 ) PSpriteDraw.__proto__ = DObject$$1;
-    PSpriteDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    PSpriteDraw.prototype.constructor = PSpriteDraw;
-    PSpriteDraw.prototype.advance = function advance (dt) {
-        this._psprite.hueOffset += dt * 0.1;
-        this._psprite.advance(dt / 2);
-    };
-    PSpriteDraw.prototype.onDraw = function onDraw () {
-        this._psprite.draw(this.alpha);
-    };
-
-    return PSpriteDraw;
-}(DObject));
-
-var Range = function Range(from, to) {
-    this.from = from;
-    this.to = to;
-};
-Range.prototype.width = function width () {
-    return this.to - this.from;
-};
-Range.prototype.move = function move (ofs) {
-    this.from += ofs;
-    this.to += ofs;
-};
-
-var LinearTimer = function LinearTimer(init, end) {
-    this.cur = 0;
-    this.range = new Range(0, 0);
-    this.range.from = init;
-    this.range.to = end;
-};
-LinearTimer.prototype.reset = function reset () {
-    this.cur = this.range.from;
-};
-LinearTimer.prototype.get = function get () {
-    return this.cur;
-};
-LinearTimer.prototype.advance = function advance (dt) {
-    if (this.cur >= this.range.to) {
-        return true;
-    }
-    this.cur += dt;
-    return false;
-};
-
-var TextDraw = (function (DObject$$1) {
-    function TextDraw(text, delay) {
-        DObject$$1.call(this, "text");
-        this._text = text;
-        this.timer = new LinearTimer(0, text.length() + delay);
-        this.offset = new Vec2(0, 0);
-        this.alpha = 1;
-        this.delay = delay;
-    }
-
-    if ( DObject$$1 ) TextDraw.__proto__ = DObject$$1;
-    TextDraw.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
-    TextDraw.prototype.constructor = TextDraw;
-    TextDraw.prototype.advance = function advance (dt) {
-        return this.timer.advance(dt);
-    };
-    TextDraw.prototype.onDraw = function onDraw () {
-        this._text.draw(this.offset, this.timer.get(), this.delay, this.alpha);
-    };
-
-    return TextDraw;
-}(DObject));
-
-var Font = (function () {
-    function anonymous(family, size, weight, italic) {
-        this.family = family;
-        this.size = size;
-        this.weight = weight;
-        this.italic = italic;
-    }
-    anonymous.prototype.fontstr = function fontstr () {
-        var this$1 = this;
-
-        var res = "";
-        if (this.italic)
-            { res += "italic"; }
-        var add = function (ent) {
-            var val = this$1[ent];
-            if (val) {
-                res += " ";
-                res += String(val);
-            }
-        };
-        add("weight");
-        add("size");
-        add("family");
-        return res;
-    };
-
-    return anonymous;
-}());
 
 ResourceGenSrc.FontCtx = function (rp) {
     var c = ResourceGen.get(new RPCanvas(rp.canvasId));
@@ -5521,11 +4878,16 @@ var FBSwitch = (function (DObject$$1) {
     FBSwitch.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        if (this.buffer.getAttachment(Attachment.Color0)) {
-            this.buffer.vp_proc(function () {
-                this$1.lower.onDraw();
-            });
-        }
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            if (this$1.buffer.getAttachment(Attachment.Color0)) {
+                var res = false;
+                this$1.buffer.vp_proc(function () {
+                    res = this$1.lower.onDraw();
+                });
+                if (!res)
+                    { this$1.destroy(); }
+            }
+        });
     };
 
     return FBSwitch;
@@ -5695,16 +5057,18 @@ var GaussSub = (function (DObject$$1) {
     GaussSub.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        var src = this.source();
-        var coeff = this.coeff;
-        engine.setUniforms({
-            u_weight: coeff,
-            u_mapSize: src.truesize().toVec4(),
-            u_uvrect: src.uvrect().toVec4(),
-            u_texDiffuse: src
-        });
-        this._fb().vp_proc(function () {
-            engine.drawGeometry(this$1._rect);
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            var src = this$1.source();
+            var coeff = this$1.coeff;
+            engine.setUniforms({
+                u_weight: coeff,
+                u_mapSize: src.truesize().toVec4(),
+                u_uvrect: src.uvrect().toVec4(),
+                u_texDiffuse: src
+            });
+            this$1._fb().vp_proc(function () {
+                engine.drawGeometry(this$1._rect);
+            });
         });
     };
 
@@ -5743,7 +5107,7 @@ var GaussFilter = (function (DObject$$1) {
         this._pass = new DrawGroup();
         this._sub = [new GaussSub("gaussh"), new GaussSub("gaussv")];
         for (var i = 0; i < 2; i++) {
-            this$1._pass.group.add(this$1._sub[i]);
+            this$1._pass.group.add(this$1._sub[i], false);
         }
     }
 
@@ -5766,13 +5130,15 @@ var GaussFilter = (function (DObject$$1) {
     GaussFilter.prototype.onDraw = function onDraw () {
         var this$1 = this;
 
-        if (this._sub[0].source()) {
-            var coeff = this._coeff();
-            for (var i = 0; i < 2; i++) {
-                this$1._sub[i].coeff = coeff;
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            if (this$1._sub[0].source()) {
+                var coeff = this$1._coeff();
+                for (var i = 0; i < 2; i++) {
+                    this$1._sub[i].coeff = coeff;
+                }
+                this$1._pass.onDraw();
             }
-            this._pass.onDraw();
-        }
+        });
     };
 
     return GaussFilter;
@@ -5827,20 +5193,24 @@ var WrapRectBase = (function (DObject$$1) {
         this._texture = tex;
     };
     WrapRectBase.prototype.onDraw = function onDraw () {
-        if (!this._texture) {
-            this.setTexture(ResourceGen.get(new RPBeta(new Vec3(1, 1, 1))));
-        }
-        engine.setUniform("u_texture", this._texture);
-        engine.setUniform("u_alpha", this.alpha);
-        engine.setUniform("u_color", this.color);
-        var ts = this._texture.truesize();
-        var s = this._texture.size();
-        var uv = new Rect(0, s.height / ts.height, s.width / ts.width, 0);
-        engine.setUniform("u_uvcenter", uv.center());
-        var vf = this.vflip ? -1 : 1;
-        var zi = 1 / this.zoom;
-        engine.setUniform("u_uvratio", new Vec2(uv.width() / 2 * zi, uv.height() / 2 * vf * zi));
-        engine.drawGeometry(this._rect.data);
+        var this$1 = this;
+
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            if (!this$1._texture) {
+                this$1.setTexture(ResourceGen.get(new RPBeta(new Vec3(1, 1, 1))));
+            }
+            engine.setUniform("u_texture", this$1._texture);
+            engine.setUniform("u_alpha", this$1.alpha);
+            engine.setUniform("u_color", this$1.color);
+            var ts = this$1._texture.truesize();
+            var s = this$1._texture.size();
+            var uv = new Rect(0, s.height / ts.height, s.width / ts.width, 0);
+            engine.setUniform("u_uvcenter", uv.center());
+            var vf = this$1.vflip ? -1 : 1;
+            var zi = 1 / this$1.zoom;
+            engine.setUniform("u_uvratio", new Vec2(uv.width() / 2 * zi, uv.height() / 2 * vf * zi));
+            engine.drawGeometry(this$1._rect.data);
+        });
     };
 
     return WrapRectBase;
@@ -5919,9 +5289,6 @@ var SineEase = (function (LinearEase$$1) {
     return SineEase;
 }(LinearEase));
 
-function Lerp(v0, v1, t) {
-    return (v1 - v0) * t + v0;
-}
 var ImageView = (function (DObject$$1) {
     function ImageView() {
         DObject$$1.call(this, "imageview");
@@ -5933,26 +5300,30 @@ var ImageView = (function (DObject$$1) {
     ImageView.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     ImageView.prototype.constructor = ImageView;
     ImageView.prototype.onDraw = function onDraw () {
-        if (!this.texture)
-            { return; }
-        this._ease.advance(0.016);
-        var s = this.texture.size();
-        var es = engine.size();
-        var r = s.width / s.height;
-        var er = es.width / es.height;
-        var sv = new Vec2(1);
-        if (er > r) {
-            sv.x = 1 / er * r;
-        }
-        else {
-            sv.y = er * (1 / r);
-        }
-        sv.mulSelf(Lerp(0.7, 1.0, this._ease.value()));
-        engine.setUniforms({
-            u_texture: this.texture,
-            u_scale: sv
+        var this$1 = this;
+
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            if (!this$1.texture)
+                { return; }
+            this$1._ease.advance(0.016);
+            var s = this$1.texture.size();
+            var es = engine.size();
+            var r = s.width / s.height;
+            var er = es.width / es.height;
+            var sv = new Vec2(1);
+            if (er > r) {
+                sv.x = 1 / er * r;
+            }
+            else {
+                sv.y = er * (1 / r);
+            }
+            sv.mulSelf(Lerp(0.7, 1.0, this$1._ease.value()));
+            engine.setUniforms({
+                u_texture: this$1.texture,
+                u_scale: sv
+            });
+            engine.drawGeometry(this$1._geom);
         });
-        engine.drawGeometry(this._geom);
     };
 
     return ImageView;
@@ -5975,10 +5346,10 @@ var StView = (function (State$$1) {
         var iv = new ImageView();
         iv.texture = t;
         iv.drawtag.priority = 20;
-        self.asDrawGroup().group.add(iv);
+        self.asDrawGroup().group.add(iv, true);
     };
     StView.prototype.onUpdate = function onUpdate (self) {
-        if (input.isMKeyClicked(0)) {
+        if (input.tapped() instanceof Vec2) {
             input.hideMState(0);
             scene.pop(1);
         }
@@ -6020,10 +5391,46 @@ var TextShow = (function (DObject$$1) {
     TextShow.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
     TextShow.prototype.constructor = TextShow;
     TextShow.prototype.onDraw = function onDraw () {
-        this.text.draw(this.offset, 65536, 1, this.alpha);
+        var this$1 = this;
+
+        return DObject$$1.prototype.aliveCB.call(this, function () {
+            this$1.text.draw(this$1.offset, 65536, 1, this$1.alpha);
+        });
     };
 
     return TextShow;
+}(DObject));
+
+var Alias = { "1day_00": "image_resource/1day_00.jpg", "47_small": "image_resource/47_small.jpg", "alien0_small": "image_resource/alien0_small.jpg", "alien_m_small": "image_resource/alien_m_small.jpg", "aro_keyboard_small": "image_resource/aro_keyboard_small.jpg", "cat_2_draft_small": "image_resource/cat_2_draft_small.jpg", "cat_2_small": "image_resource/cat_2_small.jpg", "chestburster_blood_small": "image_resource/chestburster_blood_small.jpg", "chestburster_white_small": "image_resource/chestburster_white_small.jpg", "creature_small": "image_resource/creature_small.jpg", "d_dogFinal_small": "image_resource/d_dogFinal_small.jpg", "displeased_dragon": "image_resource/displeased_dragon.jpg", "eng_zargo_small": "image_resource/eng_zargo_small.jpg", "facehugger_small": "image_resource/facehugger_small.jpg", "forest_fall_small": "image_resource/forest_fall_small.jpg", "gecko": "image_resource/gecko.jpg", "greenpython_small": "image_resource/greenpython_small.jpg", "husky0_small": "image_resource/husky0_small.jpg", "husky_paint_small": "image_resource/husky_paint_small.jpg", "jz_small": "image_resource/jz_small.jpg", "kakizome_small": "image_resource/kakizome_small.jpg", "kanzume": "image_resource/kanzume.jpg", "licker_small": "image_resource/licker_small.jpg", "lizard0_small": "image_resource/lizard0_small.jpg", "manzoku_ds": "image_resource/manzoku_ds.jpg", "mee_small": "image_resource/mee_small.jpg", "motivation_small": "image_resource/motivation_small.jpg", "muscle0_small": "image_resource/muscle0_small.jpg", "muscle1_small": "image_resource/muscle1_small.jpg", "muscle2_small": "image_resource/muscle2_small.jpg", "muscle_small": "image_resource/muscle_small.jpg", "numakuro_small": "image_resource/numakuro_small.jpg", "okami_ps": "image_resource/okami_ps.jpg", "pika_small": "image_resource/pika_small.jpg", "plates": "image_resource/plates.jpg", "prac2_small": "image_resource/prac2_small.jpg", "python0": "image_resource/python0.jpg", "saliva_final_small": "image_resource/saliva_final_small.jpg", "sand_small": "image_resource/sand_small.jpg", "shard_of_clear_sky_small": "image_resource/shard_of_clear_sky_small.jpg", "skull1_small": "image_resource/skull1_small.jpg", "skull2_small": "image_resource/skull2_small.jpg", "skull3_small": "image_resource/skull3_small.jpg", "skullNF_0_small": "image_resource/skullNF_0_small.jpg", "skullN_0_small": "image_resource/skullN_0_small.jpg", "skullN_1_0_small": "image_resource/skullN_1_0_small.jpg", "skullN_1_1_small": "image_resource/skullN_1_1_small.jpg", "skullN_2_0_small": "image_resource/skullN_2_0_small.jpg", "slime_small": "image_resource/slime_small.jpg", "small_morning_dragon": "image_resource/small_morning_dragon.jpg", "small_shadow_death": "image_resource/small_shadow_death.jpg", "small_simacchau": "image_resource/small_simacchau.jpg", "small_suddenly": "image_resource/small_suddenly.jpg", "small_suddenly_v1": "image_resource/small_suddenly_v1.jpg", "small_suddenly_v2": "image_resource/small_suddenly_v2.jpg", "sphereZ": "image_resource/sphereZ.jpg", "tank_day_small": "image_resource/tank_day_small.jpg", "twilight_creature_small": "image_resource/twilight_creature_small.jpg", "usb_tentacle_final_small": "image_resource/usb_tentacle_final_small.jpg", "wolf0": "image_resource/wolf0.jpg", "wolf1": "image_resource/wolf1.jpg", "wolfTF_C_small": "image_resource/wolfTF_C_small.jpg", "wolfTF_small": "image_resource/wolfTF_small.jpg", "wolf_in_ruins_small": "image_resource/wolf_in_ruins_small.jpg", "wolf_small": "image_resource/wolf_small.jpg", "y10_energy_small": "image_resource/y10_energy_small.jpg", "y10_izakaya_small": "image_resource/y10_izakaya_small.jpg", "y10_poster_small": "image_resource/y10_poster_small.jpg", "y10_rooftop_small": "image_resource/y10_rooftop_small.jpg", "y10_white_small": "image_resource/y10_white_small.jpg" };
+
+var Alias$1 = { "thumbnail-1day_00": "thumbnail/thumbnail-1day_00.jpg", "thumbnail-47_small": "thumbnail/thumbnail-47_small.jpg", "thumbnail-alien0_small": "thumbnail/thumbnail-alien0_small.jpg", "thumbnail-alien_m_small": "thumbnail/thumbnail-alien_m_small.jpg", "thumbnail-aro_keyboard_small": "thumbnail/thumbnail-aro_keyboard_small.jpg", "thumbnail-cat_2_draft_small": "thumbnail/thumbnail-cat_2_draft_small.jpg", "thumbnail-cat_2_small": "thumbnail/thumbnail-cat_2_small.jpg", "thumbnail-chestburster_blood_small": "thumbnail/thumbnail-chestburster_blood_small.jpg", "thumbnail-chestburster_white_small": "thumbnail/thumbnail-chestburster_white_small.jpg", "thumbnail-creature_small": "thumbnail/thumbnail-creature_small.jpg", "thumbnail-d_dogFinal_small": "thumbnail/thumbnail-d_dogFinal_small.jpg", "thumbnail-displeased_dragon": "thumbnail/thumbnail-displeased_dragon.jpg", "thumbnail-eng_zargo_small": "thumbnail/thumbnail-eng_zargo_small.jpg", "thumbnail-facehugger_small": "thumbnail/thumbnail-facehugger_small.jpg", "thumbnail-forest_fall_small": "thumbnail/thumbnail-forest_fall_small.jpg", "thumbnail-gecko": "thumbnail/thumbnail-gecko.jpg", "thumbnail-greenpython_small": "thumbnail/thumbnail-greenpython_small.jpg", "thumbnail-husky0_small": "thumbnail/thumbnail-husky0_small.jpg", "thumbnail-husky_paint_small": "thumbnail/thumbnail-husky_paint_small.jpg", "thumbnail-jz_small": "thumbnail/thumbnail-jz_small.jpg", "thumbnail-kakizome_small": "thumbnail/thumbnail-kakizome_small.jpg", "thumbnail-kanzume": "thumbnail/thumbnail-kanzume.jpg", "thumbnail-licker_small": "thumbnail/thumbnail-licker_small.jpg", "thumbnail-lizard0_small": "thumbnail/thumbnail-lizard0_small.jpg", "thumbnail-manzoku_ds": "thumbnail/thumbnail-manzoku_ds.jpg", "thumbnail-mee_small": "thumbnail/thumbnail-mee_small.jpg", "thumbnail-motivation_small": "thumbnail/thumbnail-motivation_small.jpg", "thumbnail-muscle0_small": "thumbnail/thumbnail-muscle0_small.jpg", "thumbnail-muscle1_small": "thumbnail/thumbnail-muscle1_small.jpg", "thumbnail-muscle2_small": "thumbnail/thumbnail-muscle2_small.jpg", "thumbnail-muscle_small": "thumbnail/thumbnail-muscle_small.jpg", "thumbnail-numakuro_small": "thumbnail/thumbnail-numakuro_small.jpg", "thumbnail-okami_ps": "thumbnail/thumbnail-okami_ps.jpg", "thumbnail-pika_small": "thumbnail/thumbnail-pika_small.jpg", "thumbnail-plates": "thumbnail/thumbnail-plates.jpg", "thumbnail-prac2_small": "thumbnail/thumbnail-prac2_small.jpg", "thumbnail-python0": "thumbnail/thumbnail-python0.jpg", "thumbnail-saliva_final_small": "thumbnail/thumbnail-saliva_final_small.jpg", "thumbnail-sand_small": "thumbnail/thumbnail-sand_small.jpg", "thumbnail-shard_of_clear_sky_small": "thumbnail/thumbnail-shard_of_clear_sky_small.jpg", "thumbnail-skull1_small": "thumbnail/thumbnail-skull1_small.jpg", "thumbnail-skull2_small": "thumbnail/thumbnail-skull2_small.jpg", "thumbnail-skull3_small": "thumbnail/thumbnail-skull3_small.jpg", "thumbnail-skullNF_0_small": "thumbnail/thumbnail-skullNF_0_small.jpg", "thumbnail-skullN_0_small": "thumbnail/thumbnail-skullN_0_small.jpg", "thumbnail-skullN_1_0_small": "thumbnail/thumbnail-skullN_1_0_small.jpg", "thumbnail-skullN_1_1_small": "thumbnail/thumbnail-skullN_1_1_small.jpg", "thumbnail-skullN_2_0_small": "thumbnail/thumbnail-skullN_2_0_small.jpg", "thumbnail-slime_small": "thumbnail/thumbnail-slime_small.jpg", "thumbnail-small_morning_dragon": "thumbnail/thumbnail-small_morning_dragon.jpg", "thumbnail-small_shadow_death": "thumbnail/thumbnail-small_shadow_death.jpg", "thumbnail-small_simacchau": "thumbnail/thumbnail-small_simacchau.jpg", "thumbnail-small_suddenly": "thumbnail/thumbnail-small_suddenly.jpg", "thumbnail-small_suddenly_v1": "thumbnail/thumbnail-small_suddenly_v1.jpg", "thumbnail-small_suddenly_v2": "thumbnail/thumbnail-small_suddenly_v2.jpg", "thumbnail-sphereZ": "thumbnail/thumbnail-sphereZ.jpg", "thumbnail-tank_day_small": "thumbnail/thumbnail-tank_day_small.jpg", "thumbnail-twilight_creature_small": "thumbnail/thumbnail-twilight_creature_small.jpg", "thumbnail-usb_tentacle_final_small": "thumbnail/thumbnail-usb_tentacle_final_small.jpg", "thumbnail-wolf0": "thumbnail/thumbnail-wolf0.jpg", "thumbnail-wolf1": "thumbnail/thumbnail-wolf1.jpg", "thumbnail-wolfTF_C_small": "thumbnail/thumbnail-wolfTF_C_small.jpg", "thumbnail-wolfTF_small": "thumbnail/thumbnail-wolfTF_small.jpg", "thumbnail-wolf_in_ruins_small": "thumbnail/thumbnail-wolf_in_ruins_small.jpg", "thumbnail-wolf_small": "thumbnail/thumbnail-wolf_small.jpg", "thumbnail-y10_energy_small": "thumbnail/thumbnail-y10_energy_small.jpg", "thumbnail-y10_izakaya_small": "thumbnail/thumbnail-y10_izakaya_small.jpg", "thumbnail-y10_poster_small": "thumbnail/thumbnail-y10_poster_small.jpg", "thumbnail-y10_rooftop_small": "thumbnail/thumbnail-y10_rooftop_small.jpg", "thumbnail-y10_white_small": "thumbnail/thumbnail-y10_white_small.jpg" };
+
+var DObjectWrap = (function (DObject$$1) {
+    function DObjectWrap(draw, tech, priority) {
+        if ( priority === void 0 ) priority = 0;
+
+        DObject$$1.call(this, tech, priority);
+        draw.acquire();
+        this._draw = draw;
+    }
+
+    if ( DObject$$1 ) DObjectWrap.__proto__ = DObject$$1;
+    DObjectWrap.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    DObjectWrap.prototype.constructor = DObjectWrap;
+    DObjectWrap.prototype.onDraw = function onDraw () {
+        return this._draw.onDraw();
+    };
+    DObjectWrap.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        DObject$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1._draw.discard();
+        });
+    };
+
+    return DObjectWrap;
 }(DObject));
 
 var ColRect = (function (Rect$$1) {
@@ -6048,121 +5455,189 @@ var ColRect = (function (Rect$$1) {
 }(Rect));
 
 // サムネイル1つ分
-var ThumbItem = function ThumbItem(s, ofs) {
-    this._geom = ResourceGen.get(new RPGeometry("Rect01")).data;
-    this._size = s;
-    this._offset = ofs.clone();
-    this.alpha = 0;
-    this._crect = new ColRect(ofs.x - s.width / 2, ofs.y + s.height / 2, ofs.x + s.width / 2, ofs.y - s.height / 2);
-};
-ThumbItem.prototype.advance = function advance (dt) {
-    this.alpha += dt / 8;
-    this.alpha = Math.min(1, this.alpha);
-};
-ThumbItem.prototype.hit = function hit (pos) {
-    return this._crect.hit(pos);
-};
-// スクロール値
-ThumbItem.prototype.draw = function draw (sclY) {
-    if (!this.texture)
-        { return; }
-    // テクスチャに合わせたアスペクト比調整
-    var rect = new Rect(-1, 1, 1, -1);
-    var s = this.texture.size();
-    var r = s.width / s.height;
-    if (r > 1) {
-        // 横長
-        var h = rect.height();
-        var diff = h / r;
-        rect.top -= (h - diff) / 2;
-        rect.bottom = rect.top - diff;
+var ThumbItem = (function (GObject$$1) {
+    function ThumbItem(dg) {
+        GObject$$1.call(this, 0);
+        this._geom = ResourceGen.get(new RPGeometry("Rect01")).data;
+        // Screen基準
+        this._crect = new ColRect(0, 0, 0, 0);
+        this._alpha = 0;
+        // Screen基準
+        this.targetrect = new Rect(0, 0, 0, 0);
+        this.targetalpha = 0;
+        dg.group.add(new DObjectWrap(this, null, 0), true);
     }
-    else {
-        // 縦長
-        var w = rect.width();
-        var diff$1 = w * r;
-        rect.left += (w - diff$1) / 2;
-        rect.right = rect.left + diff$1;
-    }
-    var m = Mat44.Translation(this._offset.x, this._offset.y + sclY, 0);
-    m.mulSelf(Mat44.Scaling(this._size.width / 2, this._size.height / 2, 1));
-    engine.setUniforms({
-        u_texture: this.texture,
-        u_rect: rect.toVec4(),
-        u_matrix: m,
-        u_alpha: this.alpha
-    });
-    engine.drawGeometry(this._geom);
-};
+
+    if ( GObject$$1 ) ThumbItem.__proto__ = GObject$$1;
+    ThumbItem.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    ThumbItem.prototype.constructor = ThumbItem;
+    ThumbItem.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        return GObject$$1.prototype.aliveCB.call(this, function () {
+            var Base = 0.016;
+            var Speed = 0.1;
+            var t = (Math.min(dt, Base * 4) / Base) * Speed;
+            this$1._alpha = Lerp(this$1._alpha, this$1.targetalpha, t);
+            this$1._crect.set(this$1._crect.lerp(this$1.targetrect, t));
+        });
+    };
+    ThumbItem.prototype.hit = function hit (pos) {
+        return this._crect.hit(pos);
+    };
+    ThumbItem.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        return GObject$$1.prototype.aliveCB.call(this, function () {
+            if (!this$1.texture)
+                { return; }
+            // テクスチャに合わせたアスペクト比調整
+            var rect = new Rect(-1, 1, 1, -1);
+            {
+                var s = this$1.texture.size();
+                var r = s.width / s.height;
+                if (r > 1) {
+                    // 横長
+                    var h = rect.height();
+                    var diff = h / r;
+                    rect.top -= (h - diff) / 2;
+                    rect.bottom = rect.top - diff;
+                }
+                else {
+                    // 縦長
+                    var w = rect.width();
+                    var diff$1 = w * r;
+                    rect.left += (w - diff$1) / 2;
+                    rect.right = rect.left + diff$1;
+                }
+            }
+            var size = rect.toSize().toVec2();
+            var cr = this$1._crect;
+            cr = cr.shrink(size.mul(0.5));
+            engine.setUniforms({
+                u_texture: this$1.texture,
+                u_rect: cr.toVec4(),
+                u_alpha: this$1._alpha
+            });
+            engine.drawGeometry(this$1._geom);
+        });
+    };
+
+    return ThumbItem;
+}(GObject));
+
 var Tag$2 = function Tag () {};
-// 上下左右の余白
+// 上下左右の余白(Size: Pixel)
 Tag$2.Space = "space";
 // 表示対象の領域(Size: Pixel)
 Tag$2.ScreenSize = "scsize";
 // 1マスあたりの平均サイズ(Size: Pixel)
 Tag$2.TileSize = "tilesize";
-// サムネイルテクスチャ配列
-Tag$2.ThumbnailTex = "thumbtex";
-Tag$2.Thumbnail = "thumbnail";
+// スクロールY
+Tag$2.ScrollY = "scrolly";
+Tag$2.MaxScrollY = "maxscrolly";
+Tag$2.PlaceSrc = "placesrc";
 // タイル配置情報(PlaceInfo)
 Tag$2.PlaceInfo = "placeinfo";
+// サムネイルテクスチャ配列(数)
+Tag$2.ThumbnailTex = "thumbnail_tex";
+// 表示に必要な数のサムネイル(UpdDraw)
+Tag$2.ThumbnailObj = "thumbnail_obj";
+// 必要な情報を設定済みのサムネイル
+Tag$2.Thumbnail = "thumbnail";
+var PlaceSrc = function PlaceSrc(space, tileSize, scrollY) {
+    this.space = space;
+    this.tileSize = tileSize;
+    this.scrollY = scrollY;
+};
 var PlaceInfo = function PlaceInfo(
-    // 配置オフセット(Screen)
+    // 表示開始配置オフセット(Screen)
     offset, 
     // 1マス毎の移動値(Screen)
     diff, 
     // 横縦に並べる数
     ntile, 
+    // 表示可能な行数
+    nvtile, 
     // タイルのサイズ(Screen)
     tilesize) {
     this.offset = offset;
     this.diff = diff;
     this.ntile = ntile;
+    this.nvtile = nvtile;
     this.tilesize = tilesize;
 };
 // サムネイルを並べて表示
-var ThumbView = (function (DObject$$1) {
-    function ThumbView() {
+var ThumbView = (function (GObject$$1) {
+    function ThumbView(dg, priority) {
         var this$1 = this;
+        if ( priority === void 0 ) priority = 0;
 
-        DObject$$1.call(this, "thumbview");
-        this._rf = new Refresh(( obj = {}, obj[Tag$2.ScreenSize] = null, obj[Tag$2.TileSize] = null, obj[Tag$2.Space] = null, obj[Tag$2.ThumbnailTex] = null, obj[Tag$2.PlaceInfo] = {
-                depend: [Tag$2.ScreenSize, Tag$2.TileSize, Tag$2.Space],
+        GObject$$1.call(this, priority);
+        dg.group.add(new DObjectWrap(this, "thumbview", 0), true);
+        this._rf = new Refresh(( obj = {}, obj[Tag$2.ScreenSize] = null, obj[Tag$2.TileSize] = null, obj[Tag$2.Space] = null, obj[Tag$2.ScrollY] = null, obj[Tag$2.PlaceSrc] = {
+                depend: [Tag$2.ScreenSize, Tag$2.TileSize, Tag$2.Space, Tag$2.ScrollY],
                 func: function (prev) {
-                    var ss = this$1._scsize();
-                    var ssh = ss.clone();
-                    ssh.width /= 2;
-                    ssh.height /= 2;
-                    var ts = this$1._tilesize();
-                    var sp = this$1._space();
-                    var ofs = sp.mul(0.5).toVec2();
-                    ofs.x /= ssh.width;
-                    ofs.y /= ssh.height;
-                    var ts2 = ts.clone();
-                    ts2.width /= ssh.width;
-                    ts2.height /= ssh.height;
-                    return new PlaceInfo(ofs, new Vec2(ts.width / ssh.width / 2, ts.height / ssh.height / 2), new Size(Math.max(Math.floor(ss.width / ts.width), 1), Math.max(Math.floor(ss.height / ts.height), 1)), ts2);
+                    var sch = this$1._scsize().mul(0.5);
+                    return new PlaceSrc(this$1._space().div(sch), this$1._tilesize().div(sch), this$1._scrolly());
+                }
+            }, obj[Tag$2.PlaceInfo] = {
+                depend: [Tag$2.ScreenSize, Tag$2.PlaceSrc, Tag$2.ThumbnailTex],
+                func: function (prev) {
+                    var src = this$1._placesrc();
+                    var nw = Math.max(Math.floor((2 - src.space.width) / src.tileSize.width), 1);
+                    var tilespace = src.tileSize.mul(nw);
+                    var remainX = 2 - tilespace.width;
+                    return new PlaceInfo(new Vec2(-1 + remainX / 2, 1 + src.scrollY - src.space.height / 2), new Vec2(src.tileSize.width, -src.tileSize.height), new Size(nw, Math.floor((this$1._thumbtex().length + nw - 1) / nw)), Math.floor((2 - src.space.height) / src.tileSize.height) + 1, src.tileSize);
+                }
+            }, obj[Tag$2.MaxScrollY] = {
+                depend: [Tag$2.PlaceInfo],
+                func: function (prev) {
+                    var info = this$1._placeinfo();
+                    return Math.max(0, info.ntile.height + 1 - info.nvtile) * info.tilesize.height;
+                }
+            }, obj[Tag$2.ThumbnailTex] = null, obj[Tag$2.ThumbnailObj] = {
+                depend: [Tag$2.ThumbnailTex],
+                func: function (prev) {
+                    if (!prev) {
+                        prev = {
+                            update: new UpdGroup(0),
+                            draw: new DrawGroup()
+                        };
+                    }
+                    var ug = prev.update;
+                    var dg = prev.draw;
+                    ug.group.clear();
+                    dg.group.clear();
+                    var tex = this$1._thumbtex();
+                    for (var i = 0; i < tex.length; i++) {
+                        var t = new ThumbItem(dg);
+                        t.priority = i;
+                        t.texture = tex[i];
+                        ug.group.add(t, true);
+                    }
+                    ug.onUpdate(0);
+                    return prev;
                 }
             }, obj[Tag$2.Thumbnail] = {
-                depend: [Tag$2.ThumbnailTex, Tag$2.PlaceInfo],
+                depend: [Tag$2.ThumbnailObj, Tag$2.PlaceInfo],
                 func: function (prev) {
-                    var tb = [];
-                    var tex = this$1._thumbtex();
+                    var obj = this$1._thumbobj();
+                    var g = obj.update.group.group();
                     var pl = this$1._placeinfo();
-                    var ofs = new Vec2(0, 1 - pl.offset.y - pl.tilesize.height / 2);
+                    var ofs = new Vec2(0, pl.offset.y);
                     var cur = 0;
                     for (;;) {
-                        ofs.x = -1 + pl.offset.x + pl.tilesize.width / 2;
+                        ofs.x = pl.offset.x;
+                        ofs.y += pl.diff.y;
                         for (var i = 0; i < pl.ntile.width; i++) {
-                            var t = new ThumbItem(pl.tilesize, ofs);
-                            t.alpha = -cur / tex.length;
-                            t.texture = tex[cur];
-                            tb[cur] = t;
-                            if (++cur === tex.length)
-                                { return tb; }
-                            ofs.x += pl.tilesize.width;
+                            var o = g[cur];
+                            o.targetrect = Rect.FromPointSize(ofs, pl.tilesize);
+                            o.targetalpha = 1;
+                            if (++cur === g.length)
+                                { return obj; }
+                            ofs.x += pl.diff.x;
                         }
-                        ofs.y -= pl.tilesize.height;
                     }
                 }
             }, obj ));
@@ -6170,69 +5645,67 @@ var ThumbView = (function (DObject$$1) {
         this.setScreenSize(new Size(640, 480));
         this.setTileSize(new Size(120, 120));
         this.setSpace(64, 64);
-        this.scale = 1;
-        this.alpha = 1;
     }
 
-    if ( DObject$$1 ) ThumbView.__proto__ = DObject$$1;
-    ThumbView.prototype = Object.create( DObject$$1 && DObject$$1.prototype );
+    if ( GObject$$1 ) ThumbView.__proto__ = GObject$$1;
+    ThumbView.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
     ThumbView.prototype.constructor = ThumbView;
-    ThumbView.prototype.setSpace = function setSpace (h, v) {
-        this._rf.set(Tag$2.Space, new Size(h, v));
-    };
-    ThumbView.prototype.setTileSize = function setTileSize (size) {
-        this._rf.set(Tag$2.TileSize, size);
-    };
+    ThumbView.prototype._space = function _space () { return this._rf.get(Tag$2.Space); };
+    ThumbView.prototype._scsize = function _scsize () { return this._rf.get(Tag$2.ScreenSize); };
+    ThumbView.prototype._tilesize = function _tilesize () { return this._rf.get(Tag$2.TileSize); };
+    ThumbView.prototype._scrolly = function _scrolly () { return this._rf.get(Tag$2.ScrollY); };
+    ThumbView.prototype._placeinfo = function _placeinfo () { return this._rf.get(Tag$2.PlaceInfo); };
+    ThumbView.prototype._placesrc = function _placesrc () { return this._rf.get(Tag$2.PlaceSrc); };
+    ThumbView.prototype._thumbtex = function _thumbtex () { return this._rf.get(Tag$2.ThumbnailTex); };
+    ThumbView.prototype._thumbobj = function _thumbobj () { return this._rf.get(Tag$2.ThumbnailObj); };
+    ThumbView.prototype._thumbnail = function _thumbnail () { return this._rf.get(Tag$2.Thumbnail); };
+    ThumbView.prototype.setSpace = function setSpace (h, v) { this._rf.set(Tag$2.Space, new Size(h, v)); };
+    ThumbView.prototype.setScrollY = function setScrollY (y) { this._rf.set(Tag$2.ScrollY, y); };
+    ThumbView.prototype.setTileSize = function setTileSize (size) { this._rf.set(Tag$2.TileSize, size); };
+    ThumbView.prototype.setThumbnailTex = function setThumbnailTex (tex) { this._rf.set(Tag$2.ThumbnailTex, tex); };
     ThumbView.prototype.setScreenSize = function setScreenSize (size) {
         var prev = this._rf.get(Tag$2.ScreenSize);
-        if (!prev ||
-            !prev.equal(size)) {
+        if (!prev || !prev.equal(size)) {
             this._rf.set(Tag$2.ScreenSize, size);
         }
     };
-    ThumbView.prototype.setThumbnailTex = function setThumbnailTex (tex) {
-        this._rf.set(Tag$2.ThumbnailTex, tex);
-    };
-    ThumbView.prototype._space = function _space () {
-        return this._rf.get(Tag$2.Space);
-    };
-    ThumbView.prototype._scsize = function _scsize () {
-        return this._rf.get(Tag$2.ScreenSize);
-    };
-    ThumbView.prototype._tilesize = function _tilesize () {
-        return this._rf.get(Tag$2.TileSize);
-    };
-    ThumbView.prototype._placeinfo = function _placeinfo () {
-        return this._rf.get(Tag$2.PlaceInfo);
-    };
-    ThumbView.prototype._thumbtex = function _thumbtex () {
-        return this._rf.get(Tag$2.ThumbnailTex);
-    };
-    ThumbView.prototype._thumbnail = function _thumbnail () {
-        return this._rf.get(Tag$2.Thumbnail);
-    };
+    ThumbView.prototype.maxScrollY = function maxScrollY () { return this._rf.get(Tag$2.MaxScrollY); };
+
     ThumbView.prototype.click = function click (pos) {
         var tm = this._thumbnail();
         if (tm) {
-            for (var i = 0; i < tm.length; i++) {
-                if (tm[i].hit(pos)) {
+            var g = tm.update.group.group();
+            for (var i = 0; i < g.length; i++) {
+                if (g[i].hit(pos)) {
                     return i;
                 }
             }
         }
     };
-    ThumbView.prototype.onDraw = function onDraw () {
-        var tm = this._thumbnail();
-        if (tm) {
-            for (var i = 0; i < tm.length; i++) {
-                tm[i].advance(0.16);
-                tm[i].draw(0);
+    ThumbView.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        return GObject$$1.prototype.aliveCB.call(this, function () {
+            var tm = this$1._thumbnail();
+            if (tm) {
+                tm.update.onUpdate(dt);
             }
-        }
+            GObject$$1.prototype.onUpdate.call(this$1, dt);
+        });
+    };
+    ThumbView.prototype.onDraw = function onDraw () {
+        var this$1 = this;
+
+        return GObject$$1.prototype.aliveCB.call(this, function () {
+            var tm = this$1._thumbnail();
+            if (tm) {
+                tm.draw.onDraw();
+            }
+        });
     };
 
     return ThumbView;
-}(DObject));
+}(GObject));
 
 var DrawSort;
 (function (DrawSort) {
@@ -6244,6 +5717,305 @@ var DrawSort;
         return 0;
     };
 })(DrawSort || (DrawSort = {}));
+
+function SortAlias(src) {
+    var keys = Object.keys(src);
+    var ret = [];
+    for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        ret.push({
+            alias: key,
+            path: src[key]
+        });
+    }
+    ret.sort(function (a, b) {
+        if (a.alias < b.alias)
+            { return -1; }
+        if (a.alias > b.alias)
+            { return 1; }
+        return 0;
+    });
+    return ret;
+}
+// particle dance
+var StParticle = (function (State$$1) {
+    function StParticle() {
+        State$$1.apply(this, arguments);
+        this._fb = new GLFramebuffer();
+        this._cb = [new GLTexture2DP(), new GLTexture2DP()];
+        this._rb = new GLRenderbuffer();
+        this._tex = new DataSwitch(this._cb[0], this._cb[1]);
+        // ボタンが押された時刻(Date)
+        this._pushBegin = null;
+        // ボタンが押された時の座標(Screen)
+        this._pushPos = null;
+        // 前回判定時の座標
+        this._pushPrevPos = null;
+        this._sclY = 0;
+        this._tilesize = 200;
+    }
+
+    if ( State$$1 ) StParticle.__proto__ = State$$1;
+    StParticle.prototype = Object.create( State$$1 && State$$1.prototype );
+    StParticle.prototype.constructor = StParticle;
+    StParticle.prototype._allocateBuffer = function _allocateBuffer (size) {
+        var this$1 = this;
+
+        this._size = size;
+        for (var i = 0; i < 2; i++) {
+            this$1._cb[i].setData(InterFormat.RGBA, size.width / 2, size.height / 2, InterFormat.RGBA, TexDataFormat.UB);
+            this$1._cb[i].setLinear(true, true, 0);
+        }
+        // Depth16
+        this._rb.allocate(RBFormat.Depth16, GetPowValue(size.width / 2), GetPowValue(size.height / 2));
+    };
+    StParticle.prototype.onEnter = function onEnter (self, prev) {
+        this._bLoading = false;
+        // 残像用のフレームバッファ
+        this._allocateBuffer(engine.size());
+        this._fb.attach(Attachment.Depth, this._rb);
+        var dg_m = new DrawGroup();
+        {
+            var cls = new Clear(new Vec4(0, 0, 0, 1));
+            cls.drawtag.priority = 0;
+            dg_m.group.add(cls, true);
+        }
+        // パーティクル初期化
+        {
+            var psp = new PSpriteDraw(100);
+            psp.drawtag.priority = 10;
+            psp.alpha = 0;
+            dg_m.group.add(psp, false);
+            this._alpha = 0;
+            this._psp = psp;
+        }
+        // 残像上書き
+        {
+            var wr = new WrapRectAdd();
+            wr.drawtag.priority = 20;
+            wr.alpha = 0.85;
+            dg_m.group.add(wr, false);
+            this._fr_m = wr;
+        }
+        var dg = new DrawGroup();
+        dg.setSortAlgorithm(DrawSort.Priority);
+        {
+            var fbw = new FBSwitch(this._fb);
+            fbw.drawtag.priority = 0;
+            fbw.lower = dg_m;
+            dg.group.add(fbw, true);
+        }
+        {
+            var gf = new GaussFilter();
+            this._gauss = gf;
+            gf.setDispersion(50.1);
+            gf.drawtag.priority = 5;
+            dg.group.add(gf, false);
+        }
+        // 結果表示
+        {
+            var wr$1 = new WrapRect();
+            wr$1.drawtag.priority = 10;
+            dg.group.add(wr$1, false);
+            this._fr = wr$1;
+        }
+        {
+            var ts = [];
+            var talias = SortAlias(Alias$1);
+            for (var i = 0; i < talias.length; i++) {
+                ts[i] = resource.getResource(talias[i].alias);
+                ts[i].setLinear(true, true, 0);
+            }
+            var tdg = new DrawGroup();
+            tdg.drawtag.priority = 20;
+            var tv = new ThumbView(tdg);
+            tv.setScreenSize(engine.size());
+            tv.setThumbnailTex(ts);
+            self.asUpdateGroup().group.add(tv, false);
+            dg.group.add(tdg, true);
+            this._tv = tv;
+        }
+        this._gauss.setSource(this._tex.current());
+        this._fr.setTexture(this._gauss.result());
+        self.drawTarget.set(dg);
+        {
+            var wt = new WrapRectT();
+            this._loadingBg = wt;
+            wt.alpha = 0.75;
+            wt.color = new Vec3(0, 0, 0);
+            wt.drawtag.priority = 40;
+        }
+        var ldt = new TextShow();
+        ldt.alpha = 1;
+        ldt.text.setText("Loading");
+        ldt.drawtag.priority = 50;
+        ldt.text.setSize(new Size(512, 512));
+        ldt.text.setFont(new Font("arial", "2em", "normal", false));
+        ldt.offset = PlaceCenter(engine.size(), ldt.text.resultSize());
+        this._loadText = ldt;
+    };
+    StParticle.prototype.onDown = function onDown (self, ret) {
+        if (ret instanceof Error)
+            { console.log(ret.message); }
+        else {
+            var dg = self.asDrawGroup();
+            dg.group.remove(this._loadingBg);
+            dg.group.remove(this._loadText);
+            this._bLoading = false;
+        }
+    };
+    // 画面サイズが変わった際のテクスチャリアロケート
+    StParticle.prototype._reallocIfChanged = function _reallocIfChanged () {
+        var size = engine.size();
+        if (!this._size.equal(size)) {
+            this._allocateBuffer(size);
+            this._tv.setScreenSize(size);
+            this._sclY = 0;
+            this._tv.setScrollY(this._sclY);
+        }
+    };
+    StParticle.prototype._tapped = function _tapped (self, spos) {
+        var this$1 = this;
+
+        if (!this._bLoading) {
+            var ret = this._tv.click(spos);
+            if (typeof ret === "number") {
+                this._bLoading = true;
+                var res = StParticle.IAlias[ret].alias;
+                resource.loadFrame([res], {
+                    completed: function () {
+                        scene.push(new View(res), false, true);
+                    },
+                    taskprogress: function (taskIndex, loaded, total) {
+                        var text = "Loading... " + (Math.floor(loaded / 1024)) + "kb / " + (Math.floor(total / 1024)) + "kb";
+                        this$1._loadText.text.setText(text);
+                        this$1._loadText.offset = PlaceCenter(engine.size(), this$1._loadText.text.resultSize());
+                    },
+                    progress: function (loaded, total) { },
+                    error: function () {
+                        console.log("Error");
+                    }
+                });
+                var dg = self.asDrawGroup();
+                dg.group.add(this._loadingBg, false);
+                dg.group.add(this._loadText, false);
+            }
+        }
+    };
+    StParticle.prototype._dragging = function _dragging (self, diff) {
+        if (diff.y !== 0) {
+            var max = this._tv.maxScrollY();
+            this._sclY = Saturation(this._sclY + diff.y, 0, max);
+            this._tv.setScrollY(this._sclY);
+        }
+    };
+    StParticle.prototype._swapBuffer = function _swapBuffer () {
+        this._tex.swap();
+        this._fb.attach(Attachment.Color0, this._tex.current());
+        this._fr_m.setTexture(this._tex.prev());
+        this._gauss.setSource(this._tex.current());
+    };
+    StParticle.prototype.onUpdate = function onUpdate (self, dt) {
+        this._reallocIfChanged();
+        this._swapBuffer();
+        var d = input.dragging();
+        if (d instanceof Vec2) {
+            this._dragging(self, engine.getScreenVector(d));
+        }
+        var t = input.tapped();
+        if (t instanceof Vec2) {
+            this._tapped(self, engine.getScreenCoord(t));
+        }
+        var wd = input.wheelDelta();
+        if (wd.y !== 0) {
+            var ts = this._tilesize;
+            if (wd.y > 0)
+                { ts *= 1.5; }
+            else
+                { ts /= 1.5; }
+            this._tv.setTileSize(new Size(ts, ts));
+            this._tilesize = ts;
+        }
+        this._alpha += dt / 2;
+        this._psp.advance(dt);
+        this._psp.alpha = Math.min(1, this._alpha);
+    };
+
+    return StParticle;
+}(State));
+StParticle.IAlias = SortAlias(Alias);
+var StFadeout = (function (State$$1) {
+    function StFadeout () {
+        State$$1.apply(this, arguments);
+    }
+
+    if ( State$$1 ) StFadeout.__proto__ = State$$1;
+    StFadeout.prototype = Object.create( State$$1 && State$$1.prototype );
+    StFadeout.prototype.constructor = StFadeout;
+
+    StFadeout.prototype.onEnter = function onEnter (self, prev) {
+        this._alpha = 1;
+    };
+    StFadeout.prototype.onUpdate = function onUpdate (self, dt) {
+        this._alpha -= dt;
+        self._text.alpha = this._alpha;
+        if (this._alpha < 0)
+            { self.setState(new StParticle()); }
+    };
+
+    return StFadeout;
+}(State));
+// show "HELLO WORLD"
+var StText = (function (State$$1) {
+    function StText () {
+        State$$1.apply(this, arguments);
+    }
+
+    if ( State$$1 ) StText.__proto__ = State$$1;
+    StText.prototype = Object.create( State$$1 && State$$1.prototype );
+    StText.prototype.constructor = StText;
+
+    StText.prototype.onUp = function onUp (self) {
+        var text = new TextLines(3);
+        var str = "HELLO WORLD\n\nwith\nWebGL";
+        text.setText(str);
+        text.setSize(new Size(512, 512));
+        var delay = 8;
+        var t = new TextDraw(text, delay);
+        t.drawtag.priority = 10;
+        var rs = text.resultSize();
+        t.offset = PlaceCenter(engine.size(), rs);
+        self.asDrawGroup().group.add(t, false);
+        self._text = t;
+        var fpsc = new FPSCamera();
+        engine.sys3d().camera = fpsc.camera;
+        self.asUpdateGroup().group.add(fpsc, false);
+        engine.addTechnique(resource.getResource("prog"));
+        engine.addTechnique(resource.getResource("ps"));
+        var cls = new Clear(new Vec4(0, 0, 0, 1));
+        cls.drawtag.priority = 0;
+        self.asDrawGroup().group.add(cls, true);
+        self.asDrawGroup().setSortAlgorithm(DrawSort.Priority);
+    };
+    StText.prototype.onUpdate = function onUpdate (self, dt) {
+        if (self._text.advance(dt * 15)) {
+            self.setState(new StFadeout());
+        }
+    };
+
+    return StText;
+}(State));
+var MyScene = (function (Scene$$1) {
+    function MyScene() {
+        Scene$$1.call(this, 0, new StText());
+    }
+
+    if ( Scene$$1 ) MyScene.__proto__ = Scene$$1;
+    MyScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
+    MyScene.prototype.constructor = MyScene;
+
+    return MyScene;
+}(Scene));
 
 var St_Fadeout = (function (State$$1) {
     function St_Fadeout() {
@@ -6259,7 +6031,7 @@ var St_Fadeout = (function (State$$1) {
     };
     St_Fadeout.prototype.onUpdate = function onUpdate (self, dt) {
         if (this._ease.advance(dt))
-            { scene.push(self._next(), true); }
+            { scene.push(self._next(), true, true); }
         self._rect.alpha = 1 - this._ease.value();
         self._text.alpha = 1 - this._ease.value();
         self._text.offset = PlaceCenter(engine.size(), self._text.text.resultSize());
@@ -6316,18 +6088,18 @@ var MyLoading = (function (Scene$$1) {
         });
         var dg = this.asDrawGroup();
         var cl = new Clear(new Vec4(0, 0, 0, 1));
-        dg.group.add(cl);
+        dg.group.add(cl, true);
         this._rect = new WrapRectT();
         this._rect.alpha = 1;
         this._rect.color = new Vec3(0.1, 0.1, 0.4);
-        dg.group.add(this._rect);
+        dg.group.add(this._rect, false);
         var t = new TextShow();
         var tx = t.text;
         tx.setText("loading... [000/000]");
         tx.setSize(new Size(512, 512));
         tx.setFont(new Font("arial", "2em", "normal", false));
         t.offset = PlaceCenter(engine.size(), tx.resultSize());
-        dg.group.add(t);
+        dg.group.add(t, false);
         this._text = t;
         this._loaded = 0;
         this._total = 0;
@@ -6343,322 +6115,800 @@ var MyLoading = (function (Scene$$1) {
 
 var Alias$2 = { "hsv": "resource/hsv.glsl", "imageviewf": "resource/imageviewf.fsh", "imageviewv": "resource/imageviewv.vsh", "ps": "resource/ps.prog", "sphere": "resource/sphere.png", "testPf": "resource/testPf.fsh", "testPv": "resource/testPv.vsh", "thumbviewf": "resource/thumbviewf.fsh", "thumbviewv": "resource/thumbviewv.vsh" };
 
-var Alias$4 = { "1day_00": "image_resource/1day_00.jpg", "47_small": "image_resource/47_small.jpg", "alien0_small": "image_resource/alien0_small.jpg", "alien_m_small": "image_resource/alien_m_small.jpg", "aro_keyboard_small": "image_resource/aro_keyboard_small.jpg", "cat_2_draft_small": "image_resource/cat_2_draft_small.jpg", "cat_2_small": "image_resource/cat_2_small.jpg", "chestburster_blood_small": "image_resource/chestburster_blood_small.jpg", "chestburster_white_small": "image_resource/chestburster_white_small.jpg", "creature_small": "image_resource/creature_small.jpg", "d_dogFinal_small": "image_resource/d_dogFinal_small.jpg", "displeased_dragon": "image_resource/displeased_dragon.jpg", "eng_zargo_small": "image_resource/eng_zargo_small.jpg", "facehugger_small": "image_resource/facehugger_small.jpg", "forest_fall_small": "image_resource/forest_fall_small.jpg", "gecko": "image_resource/gecko.jpg", "greenpython_small": "image_resource/greenpython_small.jpg", "husky0_small": "image_resource/husky0_small.jpg", "husky_paint_small": "image_resource/husky_paint_small.jpg", "jz_small": "image_resource/jz_small.jpg", "kakizome_small": "image_resource/kakizome_small.jpg", "kanzume": "image_resource/kanzume.jpg", "licker_small": "image_resource/licker_small.jpg", "lizard0_small": "image_resource/lizard0_small.jpg", "manzoku_ds": "image_resource/manzoku_ds.jpg", "mee_small": "image_resource/mee_small.jpg", "motivation_small": "image_resource/motivation_small.jpg", "muscle0_small": "image_resource/muscle0_small.jpg", "muscle1_small": "image_resource/muscle1_small.jpg", "muscle2_small": "image_resource/muscle2_small.jpg", "muscle_small": "image_resource/muscle_small.jpg", "numakuro_small": "image_resource/numakuro_small.jpg", "okami_ps": "image_resource/okami_ps.jpg", "pika_small": "image_resource/pika_small.jpg", "plates": "image_resource/plates.jpg", "prac2_small": "image_resource/prac2_small.jpg", "python0": "image_resource/python0.jpg", "saliva_final_small": "image_resource/saliva_final_small.jpg", "sand_small": "image_resource/sand_small.jpg", "shard_of_clear_sky_small": "image_resource/shard_of_clear_sky_small.jpg", "skull1_small": "image_resource/skull1_small.jpg", "skull2_small": "image_resource/skull2_small.jpg", "skull3_small": "image_resource/skull3_small.jpg", "skullNF_0_small": "image_resource/skullNF_0_small.jpg", "skullN_0_small": "image_resource/skullN_0_small.jpg", "skullN_1_0_small": "image_resource/skullN_1_0_small.jpg", "skullN_1_1_small": "image_resource/skullN_1_1_small.jpg", "skullN_2_0_small": "image_resource/skullN_2_0_small.jpg", "slime_small": "image_resource/slime_small.jpg", "small_morning_dragon": "image_resource/small_morning_dragon.jpg", "small_shadow_death": "image_resource/small_shadow_death.jpg", "small_simacchau": "image_resource/small_simacchau.jpg", "small_suddenly": "image_resource/small_suddenly.jpg", "small_suddenly_v1": "image_resource/small_suddenly_v1.jpg", "small_suddenly_v2": "image_resource/small_suddenly_v2.jpg", "sphereZ": "image_resource/sphereZ.jpg", "tank_day_small": "image_resource/tank_day_small.jpg", "twilight_creature_small": "image_resource/twilight_creature_small.jpg", "usb_tentacle_final_small": "image_resource/usb_tentacle_final_small.jpg", "wolf0": "image_resource/wolf0.jpg", "wolf1": "image_resource/wolf1.jpg", "wolfTF_C_small": "image_resource/wolfTF_C_small.jpg", "wolfTF_small": "image_resource/wolfTF_small.jpg", "wolf_in_ruins_small": "image_resource/wolf_in_ruins_small.jpg", "wolf_small": "image_resource/wolf_small.jpg", "y10_energy_small": "image_resource/y10_energy_small.jpg", "y10_izakaya_small": "image_resource/y10_izakaya_small.jpg", "y10_poster_small": "image_resource/y10_poster_small.jpg", "y10_rooftop_small": "image_resource/y10_rooftop_small.jpg", "y10_white_small": "image_resource/y10_white_small.jpg" };
-
-var Alias$5 = { "thumbnail-1day_00": "thumbnail/thumbnail-1day_00.jpg", "thumbnail-47_small": "thumbnail/thumbnail-47_small.jpg", "thumbnail-alien0_small": "thumbnail/thumbnail-alien0_small.jpg", "thumbnail-alien_m_small": "thumbnail/thumbnail-alien_m_small.jpg", "thumbnail-aro_keyboard_small": "thumbnail/thumbnail-aro_keyboard_small.jpg", "thumbnail-cat_2_draft_small": "thumbnail/thumbnail-cat_2_draft_small.jpg", "thumbnail-cat_2_small": "thumbnail/thumbnail-cat_2_small.jpg", "thumbnail-chestburster_blood_small": "thumbnail/thumbnail-chestburster_blood_small.jpg", "thumbnail-chestburster_white_small": "thumbnail/thumbnail-chestburster_white_small.jpg", "thumbnail-creature_small": "thumbnail/thumbnail-creature_small.jpg", "thumbnail-d_dogFinal_small": "thumbnail/thumbnail-d_dogFinal_small.jpg", "thumbnail-displeased_dragon": "thumbnail/thumbnail-displeased_dragon.jpg", "thumbnail-eng_zargo_small": "thumbnail/thumbnail-eng_zargo_small.jpg", "thumbnail-facehugger_small": "thumbnail/thumbnail-facehugger_small.jpg", "thumbnail-forest_fall_small": "thumbnail/thumbnail-forest_fall_small.jpg", "thumbnail-gecko": "thumbnail/thumbnail-gecko.jpg", "thumbnail-greenpython_small": "thumbnail/thumbnail-greenpython_small.jpg", "thumbnail-husky0_small": "thumbnail/thumbnail-husky0_small.jpg", "thumbnail-husky_paint_small": "thumbnail/thumbnail-husky_paint_small.jpg", "thumbnail-jz_small": "thumbnail/thumbnail-jz_small.jpg", "thumbnail-kakizome_small": "thumbnail/thumbnail-kakizome_small.jpg", "thumbnail-kanzume": "thumbnail/thumbnail-kanzume.jpg", "thumbnail-licker_small": "thumbnail/thumbnail-licker_small.jpg", "thumbnail-lizard0_small": "thumbnail/thumbnail-lizard0_small.jpg", "thumbnail-manzoku_ds": "thumbnail/thumbnail-manzoku_ds.jpg", "thumbnail-mee_small": "thumbnail/thumbnail-mee_small.jpg", "thumbnail-motivation_small": "thumbnail/thumbnail-motivation_small.jpg", "thumbnail-muscle0_small": "thumbnail/thumbnail-muscle0_small.jpg", "thumbnail-muscle1_small": "thumbnail/thumbnail-muscle1_small.jpg", "thumbnail-muscle2_small": "thumbnail/thumbnail-muscle2_small.jpg", "thumbnail-muscle_small": "thumbnail/thumbnail-muscle_small.jpg", "thumbnail-numakuro_small": "thumbnail/thumbnail-numakuro_small.jpg", "thumbnail-okami_ps": "thumbnail/thumbnail-okami_ps.jpg", "thumbnail-pika_small": "thumbnail/thumbnail-pika_small.jpg", "thumbnail-plates": "thumbnail/thumbnail-plates.jpg", "thumbnail-prac2_small": "thumbnail/thumbnail-prac2_small.jpg", "thumbnail-python0": "thumbnail/thumbnail-python0.jpg", "thumbnail-saliva_final_small": "thumbnail/thumbnail-saliva_final_small.jpg", "thumbnail-sand_small": "thumbnail/thumbnail-sand_small.jpg", "thumbnail-shard_of_clear_sky_small": "thumbnail/thumbnail-shard_of_clear_sky_small.jpg", "thumbnail-skull1_small": "thumbnail/thumbnail-skull1_small.jpg", "thumbnail-skull2_small": "thumbnail/thumbnail-skull2_small.jpg", "thumbnail-skull3_small": "thumbnail/thumbnail-skull3_small.jpg", "thumbnail-skullNF_0_small": "thumbnail/thumbnail-skullNF_0_small.jpg", "thumbnail-skullN_0_small": "thumbnail/thumbnail-skullN_0_small.jpg", "thumbnail-skullN_1_0_small": "thumbnail/thumbnail-skullN_1_0_small.jpg", "thumbnail-skullN_1_1_small": "thumbnail/thumbnail-skullN_1_1_small.jpg", "thumbnail-skullN_2_0_small": "thumbnail/thumbnail-skullN_2_0_small.jpg", "thumbnail-slime_small": "thumbnail/thumbnail-slime_small.jpg", "thumbnail-small_morning_dragon": "thumbnail/thumbnail-small_morning_dragon.jpg", "thumbnail-small_shadow_death": "thumbnail/thumbnail-small_shadow_death.jpg", "thumbnail-small_simacchau": "thumbnail/thumbnail-small_simacchau.jpg", "thumbnail-small_suddenly": "thumbnail/thumbnail-small_suddenly.jpg", "thumbnail-small_suddenly_v1": "thumbnail/thumbnail-small_suddenly_v1.jpg", "thumbnail-small_suddenly_v2": "thumbnail/thumbnail-small_suddenly_v2.jpg", "thumbnail-sphereZ": "thumbnail/thumbnail-sphereZ.jpg", "thumbnail-tank_day_small": "thumbnail/thumbnail-tank_day_small.jpg", "thumbnail-twilight_creature_small": "thumbnail/thumbnail-twilight_creature_small.jpg", "thumbnail-usb_tentacle_final_small": "thumbnail/thumbnail-usb_tentacle_final_small.jpg", "thumbnail-wolf0": "thumbnail/thumbnail-wolf0.jpg", "thumbnail-wolf1": "thumbnail/thumbnail-wolf1.jpg", "thumbnail-wolfTF_C_small": "thumbnail/thumbnail-wolfTF_C_small.jpg", "thumbnail-wolfTF_small": "thumbnail/thumbnail-wolfTF_small.jpg", "thumbnail-wolf_in_ruins_small": "thumbnail/thumbnail-wolf_in_ruins_small.jpg", "thumbnail-wolf_small": "thumbnail/thumbnail-wolf_small.jpg", "thumbnail-y10_energy_small": "thumbnail/thumbnail-y10_energy_small.jpg", "thumbnail-y10_izakaya_small": "thumbnail/thumbnail-y10_izakaya_small.jpg", "thumbnail-y10_poster_small": "thumbnail/thumbnail-y10_poster_small.jpg", "thumbnail-y10_rooftop_small": "thumbnail/thumbnail-y10_rooftop_small.jpg", "thumbnail-y10_white_small": "thumbnail/thumbnail-y10_white_small.jpg" };
-
-// particle dance
-var StParticle = (function (State$$1) {
-    function StParticle() {
-        State$$1.apply(this, arguments);
-        this._fb = new GLFramebuffer();
-        this._cb = [new GLTexture2DP(), new GLTexture2DP()];
-        this._rb = new GLRenderbuffer();
-        this._tex = new DataSwitch(this._cb[0], this._cb[1]);
-        // ボタンが押された時刻(Date)
-        this._pushBegin = null;
-        // ボタンが押された時の座標(Screen)
-        this._pushPos = null;
-        // 前回判定時の座標
-        this._pushPrevPos = null;
+var SysUnif3D = function SysUnif3D() {
+    this.camera = new Camera3D();
+    this.worldMatrix = Mat44.Identity();
+};
+SysUnif3D.prototype.apply = function apply (prog) {
+    if (prog.hasUniform("u_mWorld")) {
+        prog.setUniform("u_mWorld", this.worldMatrix);
     }
+    if (prog.hasUniform("u_mTrans")) {
+        var m = this.camera.getViewProjection().mulSelf(this.worldMatrix);
+        prog.setUniform("u_mTrans", m);
+    }
+    if (prog.hasUniform("u_eyePos")) {
+        prog.setUniform("u_eyePos", this.camera.pos);
+    }
+};
 
-    if ( State$$1 ) StParticle.__proto__ = State$$1;
-    StParticle.prototype = Object.create( State$$1 && State$$1.prototype );
-    StParticle.prototype.constructor = StParticle;
-    StParticle.prototype._allocateBuffer = function _allocateBuffer (size) {
+var Engine = function Engine() {
+    this._doubling = 1;
+    this._sys3d = new SysUnif3D();
+    this._tech = {};
+    this._size = new Size(0, 0);
+    this._initGL();
+};
+Engine.prototype._onResized = function _onResized () {
+    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
+    var w = window.innerWidth, h = window.innerHeight;
+    this._size = new Size(w, h);
+    var dbl = this._doubling;
+    var assign;
+        (assign = [w / dbl, h / dbl], canvas.data.width = assign[0], canvas.data.height = assign[1]);
+    gl.viewport(0, 0, w / dbl, h / dbl);
+    canvas.data.style.cssText = "width:100%;height:100%";
+};
+Engine.prototype.sys3d = function sys3d () {
+    return this._sys3d;
+};
+Engine.prototype.size = function size () {
+    return this._size;
+};
+Engine.prototype._initGL = function _initGL () {
         var this$1 = this;
 
-        this._size = size;
-        for (var i = 0; i < 2; i++) {
-            this$1._cb[i].setData(InterFormat.RGBA, size.width / 2, size.height / 2, InterFormat.RGBA, TexDataFormat.UB);
-            this$1._cb[i].setLinear(true, true, 0);
-        }
-        // Depth16
-        this._rb.allocate(RBFormat.Depth16, GetPowValue(size.width / 2), GetPowValue(size.height / 2));
+    Assert(!gl, "already initialized");
+    SetGL(ResourceGen.get(new RPWebGLCtx(Engine.CanvasName)).data);
+    if (!gl)
+        { throw new Error("WebGL not supported."); }
+    var canvas = ResourceGen.get(new RPCanvas(Engine.CanvasName));
+    canvas.data.addEventListener("webglcontextlost", function (e) {
+        glres.onContextLost();
+    });
+    canvas.data.addEventListener("webglcontextrestored", function (e) {
+        glres.onContextRestored();
+    });
+    window.onresize = function () {
+        this$1._onResized();
     };
-    StParticle.prototype.onEnter = function onEnter (self, prev) {
-        this._bLoading = false;
-        // 残像用のフレームバッファ
-        this._allocateBuffer(engine.size());
-        this._fb.attach(Attachment.Depth, this._rb);
-        var dg_m = new DrawGroup();
-        {
-            var cls = new Clear(new Vec4(0, 0, 0, 1), 1.0);
-            cls.drawtag.priority = 0;
-            dg_m.group.add(cls);
-        }
-        // パーティクル初期化
-        {
-            var psp = new PSpriteDraw(100);
-            psp.drawtag.priority = 10;
-            psp.alpha = 0;
-            dg_m.group.add(psp);
-            this._alpha = 0;
-            this._psp = psp;
-        }
-        // 残像上書き
-        {
-            var wr = new WrapRectAdd();
-            wr.drawtag.priority = 20;
-            wr.alpha = 0.85;
-            dg_m.group.add(wr);
-            this._fr_m = wr;
-        }
-        var dg = new DrawGroup();
-        dg.setSortAlgorithm(DrawSort.Priority);
-        {
-            var fbw = new FBSwitch(this._fb);
-            fbw.drawtag.priority = 0;
-            fbw.lower = dg_m;
-            dg.group.add(fbw);
-        }
-        {
-            var gf = new GaussFilter();
-            this._gauss = gf;
-            gf.setDispersion(50.1);
-            gf.drawtag.priority = 5;
-            dg.group.add(gf);
-        }
-        // 結果表示
-        {
-            var wr$1 = new WrapRect();
-            wr$1.drawtag.priority = 10;
-            dg.group.add(wr$1);
-            this._fr = wr$1;
-        }
-        {
-            var ts = [];
-            var TKey = Object.keys(Alias$5);
-            for (var i = 0; i < TKey.length; i++) {
-                ts[i] = resource.getResource(TKey[i]);
-                ts[i].setLinear(true, true, 0);
-            }
-            var tv = new ThumbView();
-            tv.setScreenSize(engine.size());
-            tv.setThumbnailTex(ts);
-            tv.drawtag.priority = 20;
-            tv.alpha = 0;
-            dg.group.add(tv);
-            this._tv = tv;
-            this._tvV = 0;
-        }
-        this._gauss.setSource(this._tex.current());
-        this._fr.setTexture(this._gauss.result());
-        self.drawTarget.set(dg);
-        {
-            var wt = new WrapRectT();
-            this._loadingBg = wt;
-            wt.alpha = 0.75;
-            wt.color = new Vec3(0, 0, 0);
-            wt.drawtag.priority = 40;
-        }
-        var ldt = new TextShow();
-        ldt.alpha = 1;
-        ldt.text.setText("Loading");
-        ldt.drawtag.priority = 50;
-        ldt.text.setSize(new Size(512, 512));
-        ldt.text.setFont(new Font("arial", "2em", "normal", false));
-        ldt.offset = PlaceCenter(engine.size(), ldt.text.resultSize());
-        this._loadText = ldt;
-    };
-    StParticle.prototype.onDown = function onDown (self, ret) {
-        if (ret instanceof Error)
-            { console.log(ret.message); }
-        else {
-            var dg = self.asDrawGroup();
-            dg.group.remove(this._loadingBg);
-            dg.group.remove(this._loadText);
-            this._bLoading = false;
-        }
-    };
-    // 画面サイズが変わった際のテクスチャリアロケート
-    StParticle.prototype._reallocIfChanged = function _reallocIfChanged () {
-        var size = engine.size();
-        if (!this._size.equal(size)) {
-            this._allocateBuffer(size);
-            this._tv.setScreenSize(size);
-        }
-    };
-    StParticle.prototype._tapped = function _tapped (self, spos) {
+    this._onResized();
+    new GLConst(gl);
+};
+Engine.prototype.draw = function draw (cb) {
         var this$1 = this;
 
-        if (!this._bLoading) {
-            var ret = this._tv.click(spos);
-            if (typeof ret === "number") {
-                this._bLoading = true;
-                var key = Object.keys(Alias$4);
-                var res = key[ret];
-                resource.loadFrame([res], {
-                    completed: function () {
-                        var v = new View(res);
-                        scene.push(v, false);
-                        v.discard();
-                    },
-                    taskprogress: function (taskIndex, loaded, total) {
-                        var text = "Loading... " + (Math.floor(loaded / 1024)) + "kb / " + (Math.floor(total / 1024)) + "kb";
-                        this$1._loadText.text.setText(text);
-                        this$1._loadText.offset = PlaceCenter(engine.size(), this$1._loadText.text.resultSize());
-                    },
-                    progress: function (loaded, total) { },
-                    error: function () {
-                        console.log("Error");
-                    }
-                });
-                var dg = self.asDrawGroup();
-                dg.group.add(this._loadingBg);
-                dg.group.add(this._loadText);
-            }
-        }
-    };
-    StParticle.prototype._dragging = function _dragging (self, diff) {
-        console.log(("dragging " + diff));
-    };
-    StParticle.prototype._detectInput = function _detectInput (self) {
-        var wpos = input.position();
-        var spos = engine.getScreenCoord(wpos);
-        var press = input.isMKeyPressing(0);
-        var time = new Date().getTime();
-        if (this._pushBegin === null) {
-            if (press) {
-                this._pushBegin = time;
-                this._pushPrevPos = this._pushPos = spos;
-            }
+    var prog = this.technique().program;
+    this.sys3d().apply(prog);
+    var tc = 0;
+    var tex = [];
+    Object.keys(this._unif).forEach(function (k) {
+        var v = this$1._unif[k];
+        if (v instanceof GLTexture) {
+            gl.activeTexture(gl.TEXTURE0 + tc);
+            v.bind_loose();
+            prog.setUniform(k, tc++);
+            tex.push(v);
         }
         else {
-            var diff = time - this._pushBegin;
-            // タップ判定
-            if (!press) {
-                // 押下開始から1秒経つまでに離された
-                if (diff < StParticle.TapTime) {
-                    // 押下開始地点から一定の距離範囲内
-                    var dist = spos.distance(this._pushPos);
-                    if (dist < StParticle.TapDistance)
-                        { this._tapped(self, spos); }
-                }
-                this._pushBegin = null;
-                this._pushPos = this._pushPrevPos = null;
+            prog.setUniform(k, v);
+        }
+    });
+    cb();
+    for (var i = 0; i < tex.length; i++)
+        { tex[i].unbind(); }
+};
+Engine.prototype.setUniforms = function setUniforms (tbl) {
+    JoinEntries(this._unif, tbl);
+};
+Engine.prototype.setUniform = function setUniform (name, value) {
+    this._unif[name] = value;
+};
+Engine.prototype.addTechnique = function addTechnique (sh) {
+        var this$1 = this;
+
+    var techL = sh.technique();
+    Object.keys(techL).forEach(function (k) {
+        var v = techL[k];
+        this$1._tech[k] = v;
+    });
+};
+Engine.prototype.setTechnique = function setTechnique (name) {
+    if (this._active)
+        { this._active.program.unbind(); }
+    this._active = this._tech[name];
+    this._activeName = name;
+    if (!this._active)
+        { throw new Error(("No such technique: " + name)); }
+    this._active.valueset.apply();
+    this._active.program.bind();
+    this._unif = {};
+};
+Engine.prototype.techName = function techName () {
+    return this._activeName;
+};
+Engine.prototype.technique = function technique () {
+    return this._active;
+};
+Engine.prototype.program = function program () {
+    return this.technique().program;
+};
+Engine.prototype.applyTag = function applyTag (tag) {
+    if (tag.technique !== null) {
+        var apl = true;
+        var tech = this.techName();
+        if (tech) {
+            if (tech === tag.technique)
+                { apl = false; }
+        }
+        if (apl)
+            { this.setTechnique(tag.technique); }
+    }
+};
+Engine.prototype.drawGeometry = function drawGeometry (geom) {
+        var this$1 = this;
+
+    this.draw(function () {
+        var idxL = [];
+        var vbg = geom.vbuffer;
+        var count = 0;
+        for (var name in vbg) {
+            var vb = vbg[name];
+            count = vb.nElem();
+            idxL.push(this$1.program().setVStream(name, vb));
+        }
+        var ib = geom.ibuffer;
+        var glflag = GLConst.PrimitiveC.convert(geom.type);
+        if (ib) {
+            ib.proc(function () {
+                gl.drawElements(glflag, ib.nElem(), ib.typeinfo().id, 0);
+            });
+        }
+        else {
+            gl.drawArrays(glflag, 0, count);
+        }
+        for (var i = 0; i < idxL.length; i++)
+            { gl.disableVertexAttribArray(idxL[i]); }
+    });
+};
+Engine.prototype.getScreenCoord = function getScreenCoord (pos) {
+    pos = this.getScreenVector(pos);
+    pos.x -= 1;
+    pos.y = pos.y + 1;
+    return pos;
+};
+Engine.prototype.getScreenVector = function getScreenVector (dir) {
+    var s = this.size();
+    var w2 = s.width / 2, h2 = s.height / 2;
+    return new Vec2(dir.x / w2, -dir.y / h2);
+};
+
+Engine.CanvasName = "maincanvas";
+
+var InputBuff = function InputBuff() {
+    this.key = {};
+    this.mkey = {};
+    this.wheelDelta = new Vec2(0);
+    this.pos = null;
+    this.dblClick = 0;
+};
+
+var InputFlag = function InputFlag() {
+    this._key = {};
+    this._keyMask = {};
+    this._mkey = {};
+    this._mkeyMask = {};
+    this._wheelDelta = new Vec2(0);
+    this._pos = new Vec2(0);
+    this._dblClick = false;
+    this._positionDelta = new Vec2(0);
+    // ボタンが押された時刻(Date)
+    this._tapBegin = null;
+    // ボタンが押された時の座標(Screen)
+    this._tapPos = null;
+    // 前回判定時の座標
+    this._tapPrevPos = null;
+    // タップ判定の結果
+    this._tapped = null;
+    // ドラッグ判定の結果
+    this._dragging = null;
+};
+InputFlag.prototype._checkTapEvent = function _checkTapEvent (ns) {
+    this._dragging = null;
+    this._tapped = null;
+    var pos = this._pos.clone();
+    var press = this.isMKeyPressing(0);
+    var time = new Date().getTime();
+    if (this._tapBegin === null) {
+        if (press) {
+            this._tapBegin = time;
+            this._tapPrevPos = this._tapPos = pos;
+        }
+    }
+    else {
+        var diff = time - this._tapBegin;
+        // タップ判定
+        if (!press) {
+            // 押下開始から1秒経つまでに離された
+            if (diff < InputFlag.TapTime) {
+                // 押下開始地点から一定の距離範囲内
+                var dist = pos.distance(this._tapPos);
+                if (dist < InputFlag.TapDistance)
+                    { this._tapped = pos; }
+            }
+            this._tapBegin = null;
+            this._tapPos = this._tapPrevPos = null;
+        }
+        else {
+            // ドラッグ判定
+            // 押下開始地点から一定の距離範囲外
+            var dist$1 = pos.distance(this._tapPos);
+            var diff$1 = pos.sub(this._tapPrevPos);
+            var bD = diff$1.len_sq() > 0;
+            this._tapPrevPos = pos;
+            if (dist$1 >= InputFlag.TapDistance && bD)
+                { this._dragging = diff$1; }
+        }
+    }
+};
+InputFlag.prototype.update = function update (ns) {
+    var Proc = function (m0, m1) {
+        for (var k in m0) {
+            if (m0[k] === -1)
+                { delete m0[k]; }
+            else
+                { ++m0[k]; }
+        }
+        for (var k$1 in m1) {
+            if (m1[k$1] === true) {
+                if (!(m0[k$1] >= 1))
+                    { m0[k$1] = 1; }
             }
             else {
-                // ドラッグ判定
-                // 押下開始地点から一定の距離範囲外
-                var dist$1 = spos.distance(this._pushPos);
-                var diff$1 = spos.sub(this._pushPrevPos);
-                var bD = diff$1.len_sq() > 0;
-                this._pushPrevPos = spos;
-                if (dist$1 >= StParticle.TapDistance && bD)
-                    { this._dragging(self, diff$1); }
+                m0[k$1] = -1;
             }
         }
     };
-    StParticle.prototype._swapBuffer = function _swapBuffer () {
-        this._tex.swap();
-        this._fb.attach(Attachment.Color0, this._tex.current());
-        this._fr_m.setTexture(this._tex.prev());
-        this._gauss.setSource(this._tex.current());
-    };
-    StParticle.prototype.onUpdate = function onUpdate (self, dt) {
-        this._reallocIfChanged();
-        this._detectInput(self);
-        this._swapBuffer();
-        this._alpha += dt / 2;
-        this._psp.advance(dt);
-        this._psp.alpha = Math.min(1, this._alpha);
-        this._tvV += dt / 4;
-        this._tvV = Math.min(1, this._tvV);
-        this._tv.scale = this._tvV + 0.8;
-        this._tv.alpha = this._tvV + 0.8;
-    };
+    // Keyboard
+    Proc(this._key, ns.key);
+    // Mouse
+    Proc(this._mkey, ns.mkey);
+    // Wheel
+    this._wheelDelta = ns.wheelDelta;
+    // DoubleClick
+    this._dblClick = (ns.dblClick) ? true : false;
+    // PositionDelta
+    if (ns.pos)
+        { this._positionDelta = ns.pos.sub(this._pos); }
+    else
+        { this._positionDelta = new Vec2(0); }
+    // Pos
+    if (ns.pos)
+        { this._pos = ns.pos.clone(); }
+    this._keyMask = {};
+    this._mkeyMask = {};
+    this._checkTapEvent(ns);
+};
+InputFlag.prototype._getMMask = function _getMMask (code) {
+    return !Boolean(this._mkeyMask[code]);
+};
+InputFlag.prototype._getMask = function _getMask (code) {
+    return !Boolean(this._keyMask[code]);
+};
+InputFlag.prototype.hideMState = function hideMState (code) {
+    this._mkeyMask[code] = true;
+};
+InputFlag.prototype.hideState = function hideState (code) {
+    this._keyMask[code] = true;
+};
+InputFlag.prototype.isMKeyPressed = function isMKeyPressed (code) {
+    return this._getMMask(code) && (this._mkey[code] === 1);
+};
+InputFlag.prototype.isMKeyPressing = function isMKeyPressing (code) {
+    return this._getMMask(code) && (this._mkey[code] >= 1);
+};
+InputFlag.prototype.isMKeyClicked = function isMKeyClicked (code) {
+    return this._getMMask(code) && (this._mkey[code] === -1);
+};
+InputFlag.prototype.isKeyPressed = function isKeyPressed (code) {
+    return this._getMask(code) && (this._key[code] === 1);
+};
+InputFlag.prototype.isKeyPressing = function isKeyPressing (code) {
+    return this._getMask(code) && (this._key[code] >= 1);
+};
+InputFlag.prototype.isKeyClicked = function isKeyClicked (code) {
+    return this._getMask(code) && (this._key[code] === -1);
+};
+InputFlag.prototype.tapped = function tapped () {
+    if (this._getMMask(0))
+        { return this._tapped; }
+    return null;
+};
+InputFlag.prototype.dragging = function dragging () {
+    if (this._getMMask(0))
+        { return this._dragging; }
+    return null;
+};
+InputFlag.prototype.position = function position () {
+    return this._pos;
+};
+InputFlag.prototype.doubleClicked = function doubleClicked () {
+    return this._dblClick;
+};
+InputFlag.prototype.wheelDelta = function wheelDelta () {
+    return this._wheelDelta;
+};
+InputFlag.prototype.positionDelta = function positionDelta () {
+    return this._positionDelta;
+};
 
-    return StParticle;
-}(State));
-StParticle.TapTime = 1000;
-StParticle.TapDistance = 0.01;
-var StFadeout = (function (State$$1) {
-    function StFadeout () {
-        State$$1.apply(this, arguments);
+InputFlag.TapTime = 1000;
+InputFlag.TapDistance = 10;
+
+var InputMgr = (function (RefCount$$1) {
+    function InputMgr() {
+        var this$1 = this;
+
+        RefCount$$1.call(this);
+        this._cur = new InputBuff();
+        this._prev = new InputBuff();
+        this._switchBuff();
+        this._flag = new InputFlag();
+        this._events = {
+            mousedown: function (e) {
+                this$1._cur.mkey[e.button] = true;
+            },
+            mouseup: function (e) {
+                this$1._cur.mkey[e.button] = false;
+            },
+            mousemove: function (e) {
+                this$1._cur.pos = new Vec2(e.pageX, e.pageY);
+            },
+            keydown: function (e) {
+                this$1._cur.key[e.keyCode] = true;
+            },
+            keyup: function (e) {
+                this$1._cur.key[e.keyCode] = false;
+            },
+            wheel: function (e) {
+                this$1._cur.wheelDelta.addSelf(new Vec3(e.deltaX, e.deltaY, e.deltaZ));
+            },
+            dblclick: function (e) {
+                this$1._cur.dblClick = 0x01;
+            },
+            touchstart: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var me = e.changedTouches[0];
+                var p = new Vec2(me.pageX, me.pageY);
+                this$1._prev.pos = this$1._cur.pos = p;
+                this$1._cur.mkey[0] = true;
+                return false;
+            },
+            touchmove: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var me = e.changedTouches[0];
+                this$1._cur.pos = new Vec2(me.pageX, me.pageY);
+                return false;
+            },
+            touchend: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                this$1._cur.mkey[0] = false;
+                return false;
+            },
+            touchcancel: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                this$1._cur.mkey[0] = false;
+                return false;
+            }
+        };
+        this._registerEvent();
     }
 
-    if ( State$$1 ) StFadeout.__proto__ = State$$1;
-    StFadeout.prototype = Object.create( State$$1 && State$$1.prototype );
-    StFadeout.prototype.constructor = StFadeout;
-
-    StFadeout.prototype.onEnter = function onEnter (self, prev) {
-        this._alpha = 1;
+    if ( RefCount$$1 ) InputMgr.__proto__ = RefCount$$1;
+    InputMgr.prototype = Object.create( RefCount$$1 && RefCount$$1.prototype );
+    InputMgr.prototype.constructor = InputMgr;
+    InputMgr.prototype.lockPointer = function lockPointer (elem) {
+        var api = [
+            "requestPointerLock",
+            "webkitRequestPointerLock",
+            "mozRequestPointerLock"
+        ];
+        var len = api.length;
+        for (var i = 0; i < len; i++) {
+            if (elem[api[i]]) {
+                elem[api[i]]();
+                return;
+            }
+        }
+        Assert(false, "pointer lock API not found");
     };
-    StFadeout.prototype.onUpdate = function onUpdate (self, dt) {
-        this._alpha -= dt;
-        self._text.alpha = this._alpha;
-        if (this._alpha < 0)
-            { self.setState(new StParticle()); }
+    InputMgr.prototype.unlockPointer = function unlockPointer () {
+        var api = [
+            "exitPointerLock",
+            "webkitExitPointerLock",
+            "mozExitPointerLock"
+        ];
+        var len = api.length;
+        for (var i = 0; i < len; i++) {
+            if (document[api[i]]) {
+                document[api[i]]();
+                return;
+            }
+        }
+        Assert(false, "pointer lock API not found");
     };
+    InputMgr.prototype._registerEvent = function _registerEvent () {
+        var this$1 = this;
 
-    return StFadeout;
-}(State));
-// show "HELLO WORLD"
-var StText = (function (State$$1) {
-    function StText () {
-        State$$1.apply(this, arguments);
-    }
-
-    if ( State$$1 ) StText.__proto__ = State$$1;
-    StText.prototype = Object.create( State$$1 && State$$1.prototype );
-    StText.prototype.constructor = StText;
-
-    StText.prototype.onUp = function onUp (self) {
-        var text = new TextLines(3);
-        var str = "HELLO WORLD\n\nwith\nWebGL";
-        text.setText(str);
-        text.setSize(new Size(512, 512));
-        var delay = 8;
-        var t = new TextDraw(text, delay);
-        t.drawtag.priority = 10;
-        var rs = text.resultSize();
-        t.offset = PlaceCenter(engine.size(), rs);
-        self.asDrawGroup().group.add(t);
-        self._text = t;
-        var fpsc = new FPSCamera();
-        engine.sys3d().camera = fpsc.camera;
-        self.asUpdateGroup().group.add(fpsc);
-        engine.addTechnique(resource.getResource("prog"));
-        engine.addTechnique(resource.getResource("ps"));
-        var cls = new Clear(new Vec4(0, 0, 0, 1));
-        cls.drawtag.priority = 0;
-        self.asDrawGroup().group.add(cls);
-        self.asDrawGroup().setSortAlgorithm(DrawSort.Priority);
-    };
-    StText.prototype.onUpdate = function onUpdate (self, dt) {
-        if (self._text.advance(dt * 15)) {
-            self.setState(new StFadeout());
+        var param = { capture: true, passive: false };
+        for (var k in this$1._events) {
+            document.addEventListener(k, this$1._events[k], param);
         }
     };
+    InputMgr.prototype._unregisterEvent = function _unregisterEvent () {
+        var this$1 = this;
 
-    return StText;
-}(State));
-var MyScene = (function (Scene$$1) {
-    function MyScene() {
-        Scene$$1.call(this, 0, new StText());
+        for (var k in this$1._events) {
+            document.removeEventListener(k, this$1._events[k]);
+        }
+    };
+    InputMgr.prototype._switchBuff = function _switchBuff () {
+        this._prev = this._cur;
+        this._cur = new InputBuff();
+    };
+    InputMgr.prototype.update = function update () {
+        this._flag.update(this._cur);
+        this._switchBuff();
+    };
+    InputMgr.prototype.isMKeyPressed = function isMKeyPressed (code) {
+        return this._flag.isMKeyPressed(code);
+    };
+    InputMgr.prototype.isMKeyPressing = function isMKeyPressing (code) {
+        return this._flag.isMKeyPressing(code);
+    };
+    InputMgr.prototype.isMKeyClicked = function isMKeyClicked (code) {
+        return this._flag.isMKeyClicked(code);
+    };
+    InputMgr.prototype.hideMState = function hideMState (code) {
+        this._flag.hideMState(code);
+    };
+    InputMgr.prototype.isKeyPressed = function isKeyPressed (code) {
+        return this._flag.isKeyPressed(code);
+    };
+    InputMgr.prototype.isKeyPressing = function isKeyPressing (code) {
+        return this._flag.isKeyPressing(code);
+    };
+    InputMgr.prototype.isKeyClicked = function isKeyClicked (code) {
+        return this._flag.isKeyClicked(code);
+    };
+    InputMgr.prototype.hideState = function hideState (code) {
+        this._flag.hideState(code);
+    };
+    InputMgr.prototype.tapped = function tapped () {
+        return this._flag.tapped();
+    };
+    InputMgr.prototype.dragging = function dragging () {
+        return this._flag.dragging();
+    };
+    InputMgr.prototype.positionDelta = function positionDelta () {
+        return this._flag.positionDelta();
+    };
+    InputMgr.prototype.position = function position () {
+        return this._flag.position();
+    };
+    InputMgr.prototype.doubleClicked = function doubleClicked () {
+        return this._flag.doubleClicked();
+    };
+    InputMgr.prototype.wheelDelta = function wheelDelta () {
+        return this._flag.wheelDelta();
+    };
+    // ---------------- from GLResourceBase ----------------
+    InputMgr.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        RefCount$$1.prototype.discard.call(this, function () {
+            if (cb)
+                { cb(); }
+            this$1._unregisterEvent();
+        });
+    };
+
+    return InputMgr;
+}(RefCount));
+
+function OutputError(where, msg) {
+    console.log(("Error in " + where + ": " + msg));
+}
+
+var SceneMgrState;
+(function (SceneMgrState) {
+    SceneMgrState[SceneMgrState["Idle"] = 0] = "Idle";
+    SceneMgrState[SceneMgrState["Draw"] = 1] = "Draw";
+    SceneMgrState[SceneMgrState["Proc"] = 2] = "Proc";
+})(SceneMgrState || (SceneMgrState = {}));
+var SceneMgr = (function (GObject$$1) {
+    function SceneMgr(firstScene, bUnique) {
+        GObject$$1.call(this);
+        this._scene = [];
+        this._nextScene = null;
+        this._nPop = 0;
+        this._state = SceneMgrState.Idle;
+        this._bSwitch = false;
+        this.push(firstScene, false, bUnique);
+        firstScene.onUp();
+        this._proceed();
     }
 
-    if ( Scene$$1 ) MyScene.__proto__ = Scene$$1;
-    MyScene.prototype = Object.create( Scene$$1 && Scene$$1.prototype );
-    MyScene.prototype.constructor = MyScene;
+    if ( GObject$$1 ) SceneMgr.__proto__ = GObject$$1;
+    SceneMgr.prototype = Object.create( GObject$$1 && GObject$$1.prototype );
+    SceneMgr.prototype.constructor = SceneMgr;
+    SceneMgr.prototype.push = function push (scene, bPop, bUnique) {
+        Assert(scene instanceof Scene);
+        // 描画メソッドでのシーン変更は禁止
+        Assert(this._state !== SceneMgrState.Draw);
+        // 一度に2つ以上のシーンを積むのは禁止
+        Assert(!this._nextScene);
+        // popした後に積むのも禁止
+        Assert(this._nPop === 0);
+        if (!bUnique)
+            { scene.acquire(); }
+        this._nextScene = scene;
+        this._bSwitch = bPop;
+        this._nPop = bPop ? 1 : 0;
+    };
+    SceneMgr.prototype.pop = function pop (n, ret) {
+        if ( n === void 0 ) n = 1;
 
-    return MyScene;
-}(Scene));
+        // 描画メソッドでのシーン変更は禁止
+        Assert(this._state !== SceneMgrState.Draw);
+        // pushした後にpopはNG
+        Assert(!this._nextScene);
+        Assert(this._nPop === 0);
+        this._bSwitch = false;
+        this._nPop = n;
+        this._return = ret;
+    };
+    SceneMgr.prototype._proceed = function _proceed () {
+        var this$1 = this;
+
+        Assert(this._state === SceneMgrState.Idle);
+        this._state = SceneMgrState.Proc;
+        var b = false;
+        while (this._nPop > 0) {
+            --this$1._nPop;
+            b = true;
+            this$1._scene.pop().discard();
+            if (this$1._scene.length === 0) {
+                this$1._nPop = 0;
+                break;
+            }
+            if (!this$1._bSwitch)
+                { this$1.top().onDown(this$1._return); }
+            delete this$1._return;
+        }
+        var ns = this._nextScene;
+        if (ns) {
+            this._nextScene = null;
+            this._scene.push(ns);
+            ns.onUp();
+            b = true;
+        }
+        this._state = SceneMgrState.Idle;
+        return b;
+    };
+    SceneMgr.prototype.top = function top () {
+        return this._scene[this._scene.length - 1];
+    };
+    SceneMgr.prototype.length = function length () {
+        return this._scene.length;
+    };
+    SceneMgr.prototype.prev = function prev () {
+        var s = this._scene;
+        if (s.length < 2)
+            { return null; }
+        return s[s.length - 2];
+    };
+    SceneMgr.prototype._empty = function _empty () {
+        return this.length() === 0;
+    };
+    SceneMgr.prototype.onUpdate = function onUpdate (dt) {
+        var this$1 = this;
+
+        for (;;) {
+            if (this$1._empty())
+                { return false; }
+            try {
+                this$1.top().onUpdate(dt);
+            }
+            catch (e) {
+                OutputError("scenemgr::onupdate()", e.message);
+            }
+            if (!this$1._proceed())
+                { break; }
+        }
+        return !this._empty();
+    };
+    SceneMgr.prototype.onDraw = function onDraw () {
+        Assert(this._state === SceneMgrState.Idle);
+        this._state = SceneMgrState.Draw;
+        var t = this.top();
+        if (!t)
+            { return false; }
+        try {
+            t.onDraw();
+        }
+        catch (e) {
+            OutputError("scenemgr::ondraw()", e.message);
+        }
+        this._state = SceneMgrState.Idle;
+        return true;
+    };
+    // -------------- from GObject --------------
+    SceneMgr.prototype.discard = function discard (cb) {
+        var this$1 = this;
+
+        GObject$$1.prototype.discard.call(this, function () {
+            if (this$1._nextScene)
+                { this$1._nextScene.discard(); }
+            var s = this$1._scene;
+            for (var i = 0; i < s.length; i++)
+                { s[i].discard(); }
+            this$1._scene = [];
+        });
+    };
+
+    return SceneMgr;
+}(GObject));
+
+var Loop = function Loop() {
+    this._timerId = null;
+    this._targetFps = 60;
+    this._reset();
+};
+Loop.prototype._reset = function _reset (now) {
+        if ( now === void 0 ) now = new Date().getTime();
+
+    if (this._timerId) {
+        clearTimeout(this._timerId);
+        this._timerId = null;
+    }
+    this._beginTime = now;
+    this._prevTime = now;
+    this._accum = 0;
+};
+Loop.prototype.running = function running () {
+    return this._timerId !== null;
+};
+Loop.prototype.targetFps = function targetFps () {
+    return this._targetFps;
+};
+Loop.prototype.accum = function accum () {
+    return this._accum;
+};
+Loop._CalcFPSArray = function _CalcFPSArray (fps) {
+    var gcd = TM$1.GCD(1000, fps);
+    var div0 = 1000 / gcd, div1 = fps / gcd;
+    var df = Math.floor(div0 / div1);
+    var tmp = [];
+    for (var i = 0; i < div1; i++) {
+        tmp.push(df);
+    }
+    var dc = df * div1;
+    for (var i$1 = 0; i$1 < (div0 - dc); i$1++)
+        { ++tmp[i$1]; }
+    return tmp;
+};
+Loop.prototype.start = function start (targetFps, cb) {
+    this.stop();
+    this._targetFps = targetFps;
+    this._reset();
+    var fps_array = Loop._CalcFPSArray(targetFps);
+    var fps_ptr = 0;
+    var self = this;
+    (function Tmp() {
+        self._timerId = setTimeout(Tmp, fps_array[fps_ptr]);
+        fps_ptr = (++fps_ptr) % fps_array.length;
+        ++self._accum;
+        var now = new Date().getTime();
+        cb((now - self._prevTime) / 1000);
+        self._prevTime = now;
+    })();
+};
+Loop.prototype.stop = function stop () {
+    this._reset();
+};
+
+var GLResourceSet = (function (GLResourceBase$$1) {
+    function GLResourceSet() {
+        GLResourceBase$$1.apply(this, arguments);
+        this._set = new Set();
+    }
+
+    if ( GLResourceBase$$1 ) GLResourceSet.__proto__ = GLResourceBase$$1;
+    GLResourceSet.prototype = Object.create( GLResourceBase$$1 && GLResourceBase$$1.prototype );
+    GLResourceSet.prototype.constructor = GLResourceSet;
+    GLResourceSet.prototype.onContextLost = function onContextLost () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextLost.call(this, function () {
+            this$1._set.forEach(function (r) {
+                r.onContextLost();
+            });
+        });
+    };
+    GLResourceSet.prototype.onContextRestored = function onContextRestored () {
+        var this$1 = this;
+
+        GLResourceBase$$1.prototype.onContextRestored.call(this, function () {
+            this$1._set.forEach(function (r) {
+                r.onContextRestored();
+            });
+        });
+    };
+    GLResourceSet.prototype.add = function add (r) {
+        this._set.add(r);
+        if (!gl.isContextLost())
+            { r.onContextRestored(); }
+    };
+    GLResourceSet.prototype.remove = function remove (r) {
+        this._set.delete(r);
+    };
+
+    return GLResourceSet;
+}(GLResourceBase));
+
+var Alias$4 = { "common": "fragile/resource/common.glsl", "gauss": "fragile/resource/gauss.def", "gaussH_FS": "fragile/resource/gaussH_FS.fsh", "gaussV_FS": "fragile/resource/gaussV_FS.fsh", "gauss_mix9": "fragile/resource/gauss_mix9.glsl", "gaussh": "fragile/resource/gaussh.vsh", "gaussv": "fragile/resource/gaussv.vsh", "gaussvalue": "fragile/resource/gaussvalue.glsl", "prog": "fragile/resource/prog.prog", "rectf": "fragile/resource/rectf.fsh", "rectv": "fragile/resource/rectv.vsh", "rectvalue": "fragile/resource/rectvalue.glsl", "testf": "fragile/resource/testf.fsh", "testv": "fragile/resource/testv.vsh", "textf": "fragile/resource/textf.fsh", "textv": "fragile/resource/textv.vsh", "textvalue": "fragile/resource/textvalue.glsl", "uv9": "fragile/resource/uv9.glsl" };
+
+function _MainLoop(base, cbAlias, cbMakeScene) {
+    SetResource(new ResStack(base));
+    cbAlias();
+    SetEngine(new Engine());
+    SetInput(new InputMgr());
+    SetScene(new SceneMgr(cbMakeScene(), true));
+    SetGLRes(new GLResourceSet());
+    glres.onContextRestored();
+}
+function MainLoop(alias, base, cbMakeScene) {
+    _MainLoop(base, function () {
+        resource.addAlias(Alias$4);
+        resource.addAlias(alias);
+    }, cbMakeScene);
+    RequestAnimationFrame(function Loop$$1() {
+        var id = RequestAnimationFrame(Loop$$1);
+        if (gl.isContextLost())
+            { return; }
+        if (!scene.onDraw()) {
+            CancelAnimationFrame(id);
+        }
+    });
+    var loop = new Loop();
+    loop.start(60, function (tick) {
+        // 最大50msまでの経過時間
+        tick = Math.min(50, tick);
+        input.update();
+        if (!scene.onUpdate(tick)) {
+            loop.stop();
+        }
+    });
+}
+
 window.onload = function () {
     var onError = function (name) {
         throw Error(("duplicate resource \"" + name + "\""));
     };
     var alias = {};
     JoinEntriesND(alias, Alias$2, onError);
-    JoinEntriesND(alias, Alias$4, onError);
-    JoinEntriesND(alias, Alias$5, onError);
+    JoinEntriesND(alias, Alias, onError);
+    JoinEntriesND(alias, Alias$1, onError);
     MainLoop(alias, ".", function () {
         return new LoadingScene(["prog"], function () {
             engine.addTechnique(resource.getResource("prog"));
             var res = ["sphere", "ps"];
-            var keys = Object.keys(Alias$5);
+            var keys = Object.keys(Alias$1);
             res = res.concat(keys);
             return new MyLoading(res, function () {
                 engine.addTechnique(resource.getResource("ps"));
